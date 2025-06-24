@@ -68,11 +68,24 @@ def extract_json_with_gpt4o(full_text: str, prompt: str) -> str:
 
 # -------- Prompt GPT --------
 prompt = """
-Tu es un assistant logistique expert.
-Voici le texte complet d'un bon de livraison multi-pages (tout le contenu du PDF est inclus ci-dessous).
+Tu es un assistant expert en logistique.
 
-Ta tâche :
-- Extrais chaque ligne produit dans un seul tableau JSON unique selon ce format :
+Voici le texte complet d’un bon de livraison PDF, qui peut contenir plusieurs pages.  
+Pour chaque ligne, extrait uniquement :
+- Référence (参考编号)
+- Produit (产品名称)
+- Nombre de colis (箱数)
+- Nombre de pièces par colis (每箱件数)
+- Total de pièces (总件数) = Nombre de colis × Nombre de pièces par colis
+
+Si un même article (même référence et nom exact) apparaît plusieurs fois, additionne les quantités.
+
+À la fin du document, le nombre total officiel de colis est indiqué.  
+Calcule la somme totale des colis extraits et compare-la à ce total officiel.  
+S’il y a un écart, indique-le uniquement dans une colonne "Alerte (警告)" (exemple : "Écart de 5 colis" ou "Erreur sur la référence XYZ").  
+Sinon, laisse la colonne vide.
+
+Formate ta réponse EXCLUSIVEMENT en tableau JSON, comme ceci :
 [
   {
     "Référence (参考编号)": "",
@@ -83,13 +96,8 @@ Ta tâche :
     "Alerte (警告)": ""
   }
 ]
-- Additionne les quantités si un même produit (référence et nom identiques) apparaît plusieurs fois.
-- Repère le nombre total officiel de colis indiqué à la fin du PDF. Ce nombre est 100% correct et tu dois vérifier que la somme des colis dans ton extraction correspond exactement à ce total.
-- Si ton total ne correspond pas, relis l'intégralité du texte, corrige l'extraction et ajuste jusqu'à correspondance parfaite.
-- Si un écart subsiste, indique-le UNIQUEMENT dans la colonne "Alerte (警告)" du tableau JSON.
-- Même s'il n'y a qu'une seule ligne, la réponse doit obligatoirement être une LISTE JSON, jamais un objet seul.
 
-Ne réponds rien d'autre que ce tableau JSON (aucun texte autour, aucune excuse).
+Ne mets rien d’autre avant ou après le tableau JSON.
 """
 
 # -------- Interface --------
