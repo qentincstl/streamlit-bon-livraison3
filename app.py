@@ -60,7 +60,7 @@ def extract_json_block(s: str) -> str:
 
 # Prompt pour GPT-4o
 prompt = (
-  prompt = (
+
     "Tu es un assistant expert en logistique.\n"
     "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
     "Ta mission : extraire toutes les lignes des produits reçus, sans regroupement, sous forme de tableau Excel.\n"
