@@ -79,34 +79,31 @@ def extract_json_block(s: str) -> str:
 
 # Prompt pour GPT-4o
 prompt = """
-Tu es un assistant logistique extrêmement rigoureux chargé d'analyser intégralement un bon de livraison PDF (souvent sur plusieurs pages).
+Tu es un assistant expert en logistique.  
+Tu dois extraire d’un bon de livraison PDF (souvent multi-pages) un tableau synthétique des produits reçus, en respectant absolument le total global officiel affiché en fin de document.
 
-Voici exactement ce que tu dois faire :
+Pour chaque produit, ne retiens que :
+- Référence (参考编号)
+- Produit (产品名称)
+- Nombre de colis (箱数)
+- Nombre de pièces par colis (每箱件数)
+- Total de pièces (总件数) = Nombre de colis × Nombre de pièces par colis
 
-1️⃣ Lis chaque page et chaque ligne attentivement, puis extrais UNIQUEMENT ces informations :
-   - Référence (参考编号)
-   - Produit (产品名称)
-   - Nombre de colis (箱数)
-   - Nombre exact de pièces par colis (每箱件数)
-   - Total exact de pièces (总件数) = Nombre de colis × Nombre de pièces par colis
+Procédure obligatoire :
+1. Parcours tout le document. Additionne toutes les lignes identiques (même référence et nom).
+2. Calcule le total global de colis que tu as extrait.  
+3. Compare-le strictement au total officiel affiché en fin de document (ce total est 100% fiable).
+4. Si ça ne correspond pas : **réanalyse**, cherche tes erreurs, corrige-les, puis vérifie à nouveau.  
+   Si malgré plusieurs vérifications, l’écart persiste, précise-le dans la colonne "Alerte (警告)" (ex : "Manque 5 colis sur 1V1073DM").
+5. N’inclus aucune colonne ou information superflue.
 
-2️⃣ Si un produit (identifié par la référence et le nom exact) apparaît sur plusieurs lignes ou pages, additionne parfaitement toutes les quantités (colis et pièces).
+Format de réponse OBLIGATOIRE :  
+- Un seul tableau JSON, comme ci-dessous.  
+- En-dessous, écris :
+  - "Nombre total de colis extrait : XXX"
+  - "Nombre total de colis officiel (PDF) : XXX"
 
-3️⃣ À la fin du PDF, il y a un total global officiel précis et fiable. Ce total est exactement juste et constitue ta référence absolue. Tu dois donc :
-   - Calculer précisément le nombre total de colis que TU as extrait.
-   - Comparer immédiatement ce nombre au total officiel indiqué clairement à la fin du document PDF.
-   - Si le total calculé ne correspond pas exactement au total officiel, tu DOIS obligatoirement réanalyser le document, identifier clairement tes erreurs d'extraction (oubli, double-compte ou mauvaise lecture), et corriger ces erreurs AVANT de donner ton résultat final.
-   - Ne t'arrête pas tant que ton total calculé ne correspond pas exactement au total officiel.
-
-4️⃣ Si tu es absolument incapable de résoudre un écart après plusieurs révisions approfondies, indique clairement la nature exacte de l’écart dans la colonne "Alerte (警告)" (exemple : "Écart de 20 pièces sur produit XYZ"). Sinon, laisse la colonne vide.
-
-⚠️ À la fin de ton tableau JSON, indique explicitement et clairement en dessous ces deux lignes récapitulatives (hors du tableau JSON, clairement séparées) :
-
-Nombre total de colis extrait : XXX (le total calculé précisément par toi)  
-Nombre total de colis officiel indiqué sur le PDF : XXX (le total officiel, qui est 100% correct)
-
-📌 FORMAT OBLIGATOIRE DE TA RÉPONSE :
-
+Exemple :
 [
   {
     "Référence (参考编号)": "1V1073DM",
@@ -117,11 +114,10 @@ Nombre total de colis officiel indiqué sur le PDF : XXX (le total officiel, qui
     "Alerte (警告)": ""
   }
 ]
+Nombre total de colis extrait : 392  
+Nombre total de colis officiel (PDF) : 392
 
-Nombre total de colis extrait : XXX  
-Nombre total de colis officiel indiqué sur le PDF : XXX  
-
-🚫 Ne réponds rien d'autre que le tableau JSON suivi précisément de ces deux lignes récapitulatives clairement séparées.
+**Ne réponds rien d’autre que ce tableau et ces deux lignes.**
 """
 # --- Interface utilisateur ---
 
