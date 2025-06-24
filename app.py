@@ -84,14 +84,13 @@ prompt = (
     "Ta mission : extraire, consolider et restituer la liste des produits reçus sous forme de tableau Excel.\n"
     "\n"
     "Procédure à suivre :\n"
-    "1. Lis chaque ligne du document et extrais les champs : Référence, Style, Marque, Produit, "
+    "1. Lis chaque ligne du document et extrais les champs : Référence, Produit, "
     "Nombre de colis, Nombre de pièces par colis, Total de pièces.\n"
     "2. Si un même article est présent sur plusieurs lignes, additionne les colis et quantités.\n"
     "3. Vérifie avec un récapitulatif global si disponible et signale les écarts dans 'Alerte'.\n"
-    "4. Ignore les dimensions, poids, batch, etc.\n"
+    "4. Ignore les dimensions, poids, batch, style, marque, etc.\n"
     "5. Formate la sortie en JSON array comme suit :\n"
-    "[{\"Référence\": \"525017\", \"Style\": \"\", \"Marque\": \"\", "
-    "\"Produit\": \"Muffins Chocolat\", \"Nombre de colis\": 12, "
+    "[{\"Référence\": \"525017\", \"Produit\": \"Muffins Chocolat\", \"Nombre de colis\": 12, "
     "\"Nombre de pièces\": 96, \"Total\": 816, \"Alerte\": \"\"}]\n"
     "Réponds uniquement par ce JSON, sans aucun texte supplémentaire."
 )
@@ -167,8 +166,27 @@ for i, img in enumerate(images):
         st.error(f"Erreur parsing JSON page {i+1} : {e}")
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 4. Affichage des résultats
+# 4. Affichage des résultats avec traductions FR/CH et suppression de colonnes
+TRANSLATION_MAP = {
+    "Référence": "参考编号",
+    "Produit": "产品",
+    "Nombre de colis": "箱数",
+    "Nombre de pièces": "每箱件数",
+    "Total": "总件数",
+    "Alerte": "警告"
+}
+
 df = pd.DataFrame(all_lignes)
+
+# Supprimer les colonnes non désirées
+df.drop(columns=["Style", "Marque"], errors="ignore", inplace=True)
+
+# Renommer les colonnes pour ajouter la version chinoise
+renamed_columns = {
+    col: f"{col} / {TRANSLATION_MAP.get(col, col)}" for col in df.columns
+}
+df.rename(columns=renamed_columns, inplace=True)
+
 st.markdown(
     '<div class="card"><div class="section-title">4. Résultats</div>',
     unsafe_allow_html=True
@@ -183,7 +201,7 @@ st.markdown(
 )
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
+    df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON_FR_CN")
 out.seek(0)
 st.download_button(
     "Télécharger le fichier Excel",
