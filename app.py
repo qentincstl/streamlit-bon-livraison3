@@ -79,21 +79,46 @@ def extract_json_block(s: str) -> str:
 
 # Prompt pour GPT-4o
 prompt = (
-    "Tu es un assistant expert en logistique.\n"
-    "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
-    "Ta mission : extraire, consolider et restituer la liste des produits reçus sous forme de tableau Excel.\n"
-    "\n"
-    "Procédure à suivre :\n"
-    "1. Lis chaque ligne du document et extrais les champs : Référence, Style, Marque, Produit, "
-    "Nombre de colis, Nombre de pièces par colis, Total de pièces.\n"
-    "2. Si un même article est présent sur plusieurs lignes, additionne les colis et quantités.\n"
-    "3. Vérifie avec un récapitulatif global si disponible et signale les écarts dans 'Alerte'.\n"
-    "4. Ignore les dimensions, poids, batch, etc.\n"
-    "5. Formate la sortie en JSON array comme suit :\n"
-    "[{\"Référence\": \"525017\", \"Style\": \"\", \"Marque\": \"\", "
-    "\"Produit\": \"Muffins Chocolat\", \"Nombre de colis\": 12, "
-    "\"Nombre de pièces\": 96, \"Total\": 816, \"Alerte\": \"\"}]\n"
-    "Réponds uniquement par ce JSON, sans aucun texte supplémentaire."
+    Tu es un assistant expert en logistique.
+Tu reçois un bon de livraison PDF, souvent composé de plusieurs pages.
+
+Ta mission : extraire précisément les produits reçus, consolider les quantités et vérifier rigoureusement la cohérence des totaux affichés en bas des pages.
+
+🔹 PROCÉDURE À SUIVRE :
+1. Lis chaque ligne du document et extrais les champs suivants uniquement :
+   - Référence (参考编号)
+   - Produit (产品)
+   - Nombre de colis (箱数)
+   - Nombre de pièces par colis (每箱件数)
+   - Total de pièces (总件数)
+
+2. Si un même produit (identifié par sa référence et son nom exact) est présent sur plusieurs lignes ou pages, additionne clairement les colis et quantités.
+
+3. À la fin de chaque page, ainsi qu'à la fin du document, se trouvent généralement des totaux globaux indiquant :
+   - Nombre total de colis (总箱数)
+   - Nombre total de pièces (总件数)
+
+   Effectue une vérification stricte entre :
+   - Les totaux que tu as calculés en additionnant tes lignes extraites
+   - Les totaux indiqués explicitement en bas des pages ou en fin du document
+
+   ⚠️ Si une différence apparaît, indique-la clairement dans une colonne "Alerte (警告)" en précisant explicitement l'écart (ex : "écart de 5 colis", "écart de 20 pièces", etc.). Sinon, laisse cette colonne vide.
+
+4. Ne prends jamais en compte les dimensions, poids, lots, batch ou autres informations non demandées.
+
+🔸 FORMATE TA RÉPONSE EXCLUSIVEMENT COMME SUIT (JSON) :
+[
+  {
+    "Référence (参考编号)": "525017",
+    "Produit (产品)": "Muffins Chocolat",
+    "Nombre de colis (箱数)": 12,
+    "Nombre de pièces par colis (每箱件数)": 8,
+    "Total de pièces (总件数)": 96,
+    "Alerte (警告)": ""
+  }
+]
+
+⚠️ Ne réponds absolument rien d'autre que ce tableau JSON, aucun texte additionnel.
 )
 
 # --- Interface utilisateur ---
