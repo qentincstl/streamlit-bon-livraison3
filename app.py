@@ -78,9 +78,8 @@ def extract_json_block(s: str) -> str:
     return max(matches, key=len)
 
 # Prompt pour GPT-4o
-prompt = (
-   
-    Tu es un assistant expert en logistique chargé d'extraire les informations précises d'un bon de livraison PDF comportant souvent plusieurs pages.
+prompt = """
+Tu es un assistant expert en logistique chargé d'extraire les informations précises d'un bon de livraison PDF comportant souvent plusieurs pages.
 
 ✅ Ta mission exacte :
 1. Lis chaque ligne du document pour extraire exclusivement ces informations :
@@ -114,7 +113,7 @@ prompt = (
 ]
 
 🚨 Ne réponds absolument rien d'autre que ce tableau JSON final. Aucune autre explication.
-)
+"""
 # --- Interface utilisateur ---
 
 # 1. Import du document
