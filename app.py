@@ -79,13 +79,15 @@ Ta tâche :
     "Produit (产品名称)": "",
     "Nombre de colis (箱数)": 0,
     "Nombre de pièces par colis (每箱件数)": 0,
-    "Total de pièces (总件数)": 0
+    "Total de pièces (总件数)": 0,
+    "Alerte (警告)": ""
   }
 ]
 - Additionne les quantités si un même produit (référence et nom identiques) apparaît plusieurs fois.
 - Repère le nombre total officiel de colis indiqué à la fin du PDF. Ce nombre est 100% correct et tu dois vérifier que la somme des colis dans ton extraction correspond exactement à ce total.
 - Si ton total ne correspond pas, relis l'intégralité du texte, corrige l'extraction et ajuste jusqu'à correspondance parfaite.
 - Si un écart subsiste, indique-le UNIQUEMENT dans la colonne "Alerte (警告)" du tableau JSON.
+- Même s'il n'y a qu'une seule ligne, la réponse doit obligatoirement être une LISTE JSON, jamais un objet seul.
 
 Ne réponds rien d'autre que ce tableau JSON (aucun texte autour, aucune excuse).
 """
@@ -139,9 +141,16 @@ with st.spinner("Analyse GPT-4o en cours... (1 à 3 essais automatiques si besoi
 # Construction DataFrame et affichage
 try:
     lignes = json.loads(output_clean)
+    if isinstance(lignes, dict):
+        lignes = [lignes]
+    if not isinstance(lignes, list):
+        st.error("La sortie du modèle n'est ni une liste ni un dictionnaire, résultat : " + repr(lignes))
+        st.stop()
+    if len(lignes) == 0:
+        st.warning("La sortie JSON est vide.")
     df = pd.DataFrame(lignes)
 except Exception as e:
-    st.error(f"Erreur parsing JSON : {e}")
+    st.error(f"Erreur parsing JSON : {e}\nSortie brute : {output_clean}")
     st.stop()
 
 st.markdown('<div class="card"><div class="section-title">4. Résultats</div>', unsafe_allow_html=True)
