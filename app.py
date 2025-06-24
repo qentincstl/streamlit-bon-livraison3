@@ -60,21 +60,31 @@ def extract_json_block(s: str) -> str:
 
 # Prompt pour GPT-4o
 prompt = (
-
     "Tu es un assistant expert en logistique.\n"
     "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
-    "Ta mission : extraire toutes les lignes des produits reçus, sans regroupement, sous forme de tableau Excel.\n"
+    "Ta mission est d'extraire les produits reçus et de vérifier les totaux globaux.\n"
     "\n"
-    "Procédure :\n"
-    "1. Pour chaque ligne du document, extrais : Référence, Produit, "
-    "Nombre de colis, Nombre de pièces par colis, Total de pièces.\n"
-    "2. Ne regroupe rien, même si un produit revient plusieurs fois.\n"
-    "3. À la fin, s’il y a un récapitulatif global dans le document, signale les écarts ligne par ligne dans le champ 'Alerte'.\n"
-    "4. Ignore dimensions, poids, batch, style, marque, etc.\n"
-    "5. Formate la sortie en JSON array comme suit :\n"
-    "[{\"Référence\": \"525017\", \"Produit\": \"Muffins Chocolat\", \"Nombre de colis\": 12, "
-    "\"Nombre de pièces\": 96, \"Total\": 816, \"Alerte\": \"\"}]\n"
-    "Réponds uniquement par ce JSON, sans aucun texte supplémentaire."
+    "Étapes à suivre :\n"
+    "1. Parcours toutes les pages.\n"
+    "2. Repère en priorité, s'ils existent, les totaux globaux inscrits dans le document, généralement en bas :\n"
+    "   - total de pièces\n"
+    "   - total de colis ou nombre total de lignes\n"
+    "   Enregistre ces valeurs comme référence.\n"
+    "3. Ensuite, lis chaque ligne de détail produit (colisage) et extrait les champs suivants :\n"
+    "   - Référence\n"
+    "   - Produit\n"
+    "   - Quantité totale de pièces (ex: 837)\n"
+    "4. Ne fais aucun calcul à partir de colis ou pièces par colis. N’utilise que la quantité brute affichée dans le document.\n"
+    "5. Calcule le total cumulé des pièces à partir des lignes extraites.\n"
+    "6. Compare ce total avec celui trouvé en étape 2.\n"
+    "7. Ajoute une colonne 'Alerte' :\n"
+    "   - Laisse vide si tout correspond\n"
+    "   - Sinon indique 'Écart : [description]'\n"
+    "\n"
+    "Réponds uniquement avec un tableau JSON comme suit :\n"
+    "[{\"Référence\": \"1V1073DM\", \"Produit\": \"MESO MASK 50ML POT SPE\", \"Total\": 837, \"Alerte\": \"\"}]\n"
+    "\n"
+    "⚠️ Ne commente pas. Ne fournis aucune explication. Juste ce tableau JSON."
 )
 
 
