@@ -50,25 +50,6 @@ def extract_images_from_pdf(pdf_bytes: bytes):
         images.append(img)
     return images
 
-def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
-    """Envoie une image à GPT-4o avec le prompt et récupère la réponse brute."""
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode()
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-            ]
-        }],
-        max_tokens=1500,
-        temperature=0
-    )
-    return response.choices[0].message.content
-
 def extract_json_block(s: str) -> str:
     """Isole le plus grand bloc JSON (entre {} ou []) dans une chaîne."""
     json_regex = re.compile(r'(\[.*?\]|\{.*?\})', re.DOTALL)
@@ -132,38 +113,44 @@ for i, img in enumerate(images):
     st.image(img, caption=f"Page {i+1}", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 3. Extraction JSON
-all_lignes = []
+# 3. Extraction JSON (TOUTES les pages envoyées à GPT d'un coup)
 st.markdown(
     '<div class="card"><div class="section-title">3. Extraction JSON</div>',
     unsafe_allow_html=True
 )
-for i, img in enumerate(images):
-    st.markdown(f"##### Analyse page {i+1} …")
-    success = False
-    output, output_clean = None, None
+st.markdown("##### Analyse globale du document …")
 
-    with st.spinner("Analyse en cours... (jusqu'à 6 essais automatiques)"):
-        for attempt in range(1, 7):  # 6 tentatives
-            try:
-                output = extract_json_with_gpt4o(img, prompt)
-                output_clean = extract_json_block(output)
-                success = True
-                break  # Succès, on sort
-            except Exception:
-                pass  # On retente
+# Convertir toutes les images en base64 pour GPT
+encoded_images = []
+for img in images:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    encoded_images.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
 
-    st.code(output or "Aucune réponse retournée", language="json")
-
-    if not success:
-        st.error(f"Échec extraction JSON après 6 essais sur la page {i+1}. Texte brut retourné :\n{output}")
-        continue
-
+with st.spinner("Analyse complète en cours..."):
     try:
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}] + encoded_images
+            }],
+            max_tokens=3000,
+            temperature=0
+        )
+        output = response.choices[0].message.content
+        output_clean = extract_json_block(output)
         lignes = json.loads(output_clean)
-        all_lignes.extend(lignes)
+        success = True
     except Exception as e:
-        st.error(f"Erreur parsing JSON page {i+1} : {e}")
+        lignes = []
+        success = False
+        st.error(f"Erreur pendant l'extraction JSON : {e}")
+
+st.code(output if success else "Aucune réponse retournée", language="json")
+
+all_lignes = lignes
 st.markdown('</div>', unsafe_allow_html=True)
 
 # 4. Affichage des résultats avec traductions FR/CH et suppression de colonnes
