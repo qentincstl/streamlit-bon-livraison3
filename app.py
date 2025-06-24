@@ -76,7 +76,7 @@ prompt = (
     "\"Nombre de pièces\": 96, \"Total\": 816, \"Alerte\": \"\"}]\n"
     "Réponds uniquement par ce JSON, sans aucun texte supplémentaire."
 )
-)
+
 
 # --- Interface utilisateur ---
 
