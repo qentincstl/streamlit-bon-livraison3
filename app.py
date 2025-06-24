@@ -3,20 +3,17 @@ import pandas as pd
 import openai
 import io
 import json
-import base64
 import hashlib
 import fitz
-from PIL import Image
 import re
 
-# Configuration de la page
+# -------- Configuration Streamlit --------
 st.set_page_config(
     page_title="Fiche de réception",
     layout="wide",
     page_icon="📋"
 )
 
-# CSS personnalisé
 st.markdown("""
 <style>
   .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
@@ -31,59 +28,51 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Clé API OpenAI depuis les secrets Streamlit
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
     st.error("🛑 Ajoutez `OPENAI_API_KEY` dans les Secrets de Streamlit Cloud.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# --- Fonctions utilitaires ---
+# -------- Fonctions --------
 
-def extract_images_from_pdf(pdf_bytes: bytes):
-    """Extrait chaque page du PDF en tant qu'image PIL."""
-    images = []
+def extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    """Extrait tout le texte du PDF, toutes pages confondues."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    texte = []
     for page in doc:
-        pix = page.get_pixmap(dpi=300)
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
-        images.append(img)
-    return images
-
-def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
-    """Envoie une image à GPT-4o avec le prompt et récupère la réponse brute."""
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode()
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-            ]
-        }],
-        max_tokens=1500,
-        temperature=0
-    )
-    return response.choices[0].message.content
+        texte.append(page.get_text())
+    return "\n".join(texte)
 
 def extract_json_block(s: str) -> str:
-    """Isole le plus grand bloc JSON (entre {} ou []) dans une chaîne."""
+    """Isole le plus grand bloc JSON (entre [] ou {})."""
     json_regex = re.compile(r'(\[.*?\]|\{.*?\})', re.DOTALL)
     matches = json_regex.findall(s)
     if not matches:
         raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
     return max(matches, key=len)
 
-# Prompt pour GPT-4o
+def extract_json_with_gpt4o(full_text: str, prompt: str) -> str:
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt + "\n\n" + full_text
+            }
+        ],
+        max_tokens=2000,
+        temperature=0
+    )
+    return response.choices[0].message.content
+
+# -------- Prompt GPT --------
 prompt = """
+Tu es un assistant logistique expert.
+Voici le texte complet d'un bon de livraison multi-pages (tout le contenu du PDF est inclus ci-dessous).
 
-Ne réponds par aucun texte, aucune explication, aucun commentaire, aucune excuse, aucune remarque sur tes capacités. 
-
-Ta seule mission : extraire et consolider TOUTES les lignes produit d'un bon de livraison (sous forme de texte ou d'image), même sur plusieurs pages, et me les restituer dans un tableau JSON unique, selon ce format :
-
+Ta tâche :
+- Extrais chaque ligne produit dans un seul tableau JSON unique selon ce format :
 [
   {
     "Référence (参考编号)": "",
@@ -93,16 +82,16 @@ Ta seule mission : extraire et consolider TOUTES les lignes produit d'un bon de 
     "Total de pièces (总件数)": 0
   }
 ]
+- Additionne les quantités si un même produit (référence et nom identiques) apparaît plusieurs fois.
+- Repère le nombre total officiel de colis indiqué à la fin du PDF. Ce nombre est 100% correct et tu dois vérifier que la somme des colis dans ton extraction correspond exactement à ce total.
+- Si ton total ne correspond pas, relis l'intégralité du texte, corrige l'extraction et ajuste jusqu'à correspondance parfaite.
+- Si un écart subsiste, indique-le UNIQUEMENT dans la colonne "Alerte (警告)" du tableau JSON.
 
-À la fin du document, trouve le total officiel des colis affiché sur le bon (il est 100% exact), compare-le à la somme des colis de ton extraction, et **corrige toute erreur de lecture jusqu'à correspondance parfaite**.
-
-Si malgré tes corrections, il reste un écart ou une ambiguïté, écris-le UNIQUEMENT dans une colonne "Alerte (警告)" dans le tableau JSON.
-
-**Tu ne dois JAMAIS écrire autre chose que ce tableau JSON.**
+Ne réponds rien d'autre que ce tableau JSON (aucun texte autour, aucune excuse).
 """
-# --- Interface utilisateur ---
 
-# 1. Import du document
+# -------- Interface --------
+
 st.markdown(
     '<div class="card"><div class="section-title">1. Import du document</div></div>',
     unsafe_allow_html=True
@@ -121,70 +110,46 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Extraction des images
 ext = uploaded.name.lower().rsplit('.', 1)[-1]
 if ext == 'pdf':
-    images = extract_images_from_pdf(file_bytes)
+    full_text = extract_text_from_pdf(file_bytes)
+    st.markdown('<div class="card"><div class="section-title">2. Texte extrait du PDF</div>', unsafe_allow_html=True)
+    st.text_area("Texte extrait :", full_text, height=300)
+    st.markdown('</div>', unsafe_allow_html=True)
 else:
-    images = [Image.open(io.BytesIO(file_bytes))]
+    st.warning("Ce script ne gère que les PDF pour extraction globale multi-pages.")
+    st.stop()
 
-# 2. Aperçu du document
-st.markdown(
-    '<div class="card"><div class="section-title">2. Aperçu du document</div>',
-    unsafe_allow_html=True
-)
-for i, img in enumerate(images):
-    st.image(img, caption=f"Page {i+1}", use_container_width=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-# 3. Extraction JSON
-all_lignes = []
-st.markdown(
-    '<div class="card"><div class="section-title">3. Extraction JSON</div>',
-    unsafe_allow_html=True
-)
-for i, img in enumerate(images):
-    st.markdown(f"##### Analyse page {i+1} …")
-    success = False
+# Extraction JSON globale
+st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
+with st.spinner("Analyse GPT-4o en cours... (1 à 3 essais automatiques si besoin)"):
     output, output_clean = None, None
+    for attempt in range(1, 4):
+        try:
+            output = extract_json_with_gpt4o(full_text, prompt)
+            output_clean = extract_json_block(output)
+            break  # Succès
+        except Exception as e:
+            output_clean = None
+    if not output_clean:
+        st.error(f"Échec extraction JSON après 3 essais. Réponse brute :\n{output}")
+        st.stop()
+    st.code(output, language="json")
 
-    with st.spinner("Analyse en cours... (jusqu'à 6 essais automatiques)"):
-        for attempt in range(1, 7):  # 6 tentatives
-            try:
-                output = extract_json_with_gpt4o(img, prompt)
-                output_clean = extract_json_block(output)
-                success = True
-                break  # Succès, on sort
-            except Exception:
-                pass  # On retente
+# Construction DataFrame et affichage
+try:
+    lignes = json.loads(output_clean)
+    df = pd.DataFrame(lignes)
+except Exception as e:
+    st.error(f"Erreur parsing JSON : {e}")
+    st.stop()
 
-    st.code(output or "Aucune réponse retournée", language="json")
-
-    if not success:
-        st.error(f"Échec extraction JSON après 6 essais sur la page {i+1}. Texte brut retourné :\n{output}")
-        continue
-
-    try:
-        lignes = json.loads(output_clean)
-        all_lignes.extend(lignes)
-    except Exception as e:
-        st.error(f"Erreur parsing JSON page {i+1} : {e}")
-st.markdown('</div>', unsafe_allow_html=True)
-
-# 4. Affichage des résultats
-df = pd.DataFrame(all_lignes)
-st.markdown(
-    '<div class="card"><div class="section-title">4. Résultats</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="card"><div class="section-title">4. Résultats</div>', unsafe_allow_html=True)
 st.dataframe(df, use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 5. Export Excel
-st.markdown(
-    '<div class="card"><div class="section-title">5. Export Excel</div>',
-    unsafe_allow_html=True
-)
+# Export Excel
+st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
     df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
