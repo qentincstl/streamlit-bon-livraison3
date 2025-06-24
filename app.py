@@ -79,38 +79,32 @@ def extract_json_block(s: str) -> str:
 
 # Prompt pour GPT-4o
 prompt = (
-    Tu es un assistant expert en logistique.
-Tu reçois un bon de livraison PDF, souvent composé de plusieurs pages.
+    Tu es un assistant expert en logistique chargé d'extraire les informations précises d'un bon de livraison PDF comportant souvent plusieurs pages.
 
-Ta mission : extraire précisément les produits reçus, consolider les quantités et vérifier rigoureusement la cohérence des totaux affichés en bas des pages.
-
-🔹 PROCÉDURE À SUIVRE :
-1. Lis chaque ligne du document et extrais les champs suivants uniquement :
+✅ Ta mission exacte :
+1. Lis chaque ligne du document pour extraire exclusivement ces informations :
    - Référence (参考编号)
-   - Produit (产品)
+   - Produit (产品名称)
    - Nombre de colis (箱数)
    - Nombre de pièces par colis (每箱件数)
-   - Total de pièces (总件数)
+   - Total de pièces (总件数) = (Nombre de colis) × (Nombre de pièces par colis)
 
-2. Si un même produit (identifié par sa référence et son nom exact) est présent sur plusieurs lignes ou pages, additionne clairement les colis et quantités.
+2. Si le même produit (identifié par sa référence et son nom exact) apparaît sur plusieurs lignes ou plusieurs pages, additionne clairement et précisément les colis et les quantités.
 
-3. À la fin de chaque page, ainsi qu'à la fin du document, se trouvent généralement des totaux globaux indiquant :
-   - Nombre total de colis (总箱数)
-   - Nombre total de pièces (总件数)
+3. À la fin du document, il y a un total global précis et fiable du nombre total de colis livrés (environ 10000 colis dans cet exemple). 
+   👉 Ce total est exact à 100% et DOIT être utilisé comme référence absolue.
 
-   Effectue une vérification stricte entre :
-   - Les totaux que tu as calculés en additionnant tes lignes extraites
-   - Les totaux indiqués explicitement en bas des pages ou en fin du document
+4. Additionne soigneusement TOUS les colis que tu as extraits. 
+   - Si ton total EXACT ne correspond pas au total global indiqué sur le bon, tu dois immédiatement identifier et rechercher précisément les erreurs d'extraction que tu as commises (ex : lignes oubliées, quantités mal lues).
+   - Réanalyse le document jusqu’à ce que ta somme des colis extraits corresponde parfaitement au total global du bon.
 
-   ⚠️ Si une différence apparaît, indique-la clairement dans une colonne "Alerte (警告)" en précisant explicitement l'écart (ex : "écart de 5 colis", "écart de 20 pièces", etc.). Sinon, laisse cette colonne vide.
+⚠️ Si malgré plusieurs tentatives tu identifies une ambiguïté ou une différence impossible à résoudre, indique-le clairement dans la colonne "Alerte (警告)" en précisant précisément l’écart constaté (exemple : "écart de 8 colis", "ambiguïté sur la ligne du produit X"). Si tout est correct, laisse cette colonne vide.
 
-4. Ne prends jamais en compte les dimensions, poids, lots, batch ou autres informations non demandées.
-
-🔸 FORMATE TA RÉPONSE EXCLUSIVEMENT COMME SUIT (JSON) :
+📝 Format final obligatoire de ta réponse (exclusivement en JSON) :
 [
   {
     "Référence (参考编号)": "525017",
-    "Produit (产品)": "Muffins Chocolat",
+    "Produit (产品名称)": "Muffins Chocolat",
     "Nombre de colis (箱数)": 12,
     "Nombre de pièces par colis (每箱件数)": 8,
     "Total de pièces (总件数)": 96,
@@ -118,9 +112,8 @@ Ta mission : extraire précisément les produits reçus, consolider les quantit�
   }
 ]
 
-⚠️ Ne réponds absolument rien d'autre que ce tableau JSON, aucun texte additionnel.
+🚨 Ne réponds absolument rien d'autre que ce tableau JSON final. Aucune autre explication.
 )
-
 # --- Interface utilisateur ---
 
 # 1. Import du document
