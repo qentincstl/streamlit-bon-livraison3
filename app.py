@@ -60,20 +60,22 @@ def extract_json_block(s: str) -> str:
 
 # Prompt pour GPT-4o
 prompt = (
+  prompt = (
     "Tu es un assistant expert en logistique.\n"
     "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
-    "Ta mission : extraire, consolider et restituer la liste des produits reçus sous forme de tableau Excel.\n"
+    "Ta mission : extraire toutes les lignes des produits reçus, sans regroupement, sous forme de tableau Excel.\n"
     "\n"
-    "Procédure à suivre :\n"
-    "1. Lis chaque ligne du document et extrais les champs : Référence, Produit, "
+    "Procédure :\n"
+    "1. Pour chaque ligne du document, extrais : Référence, Produit, "
     "Nombre de colis, Nombre de pièces par colis, Total de pièces.\n"
-    "2. Si un même article est présent sur plusieurs lignes, additionne les colis et quantités.\n"
-    "3. Vérifie avec un récapitulatif global si disponible et signale les écarts dans 'Alerte'.\n"
-    "4. Ignore les dimensions, poids, batch, style, marque, etc.\n"
+    "2. Ne regroupe rien, même si un produit revient plusieurs fois.\n"
+    "3. À la fin, s’il y a un récapitulatif global dans le document, signale les écarts ligne par ligne dans le champ 'Alerte'.\n"
+    "4. Ignore dimensions, poids, batch, style, marque, etc.\n"
     "5. Formate la sortie en JSON array comme suit :\n"
     "[{\"Référence\": \"525017\", \"Produit\": \"Muffins Chocolat\", \"Nombre de colis\": 12, "
     "\"Nombre de pièces\": 96, \"Total\": 816, \"Alerte\": \"\"}]\n"
     "Réponds uniquement par ce JSON, sans aucun texte supplémentaire."
+)
 )
 
 # --- Interface utilisateur ---
