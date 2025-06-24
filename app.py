@@ -79,45 +79,26 @@ def extract_json_block(s: str) -> str:
 
 # Prompt pour GPT-4o
 prompt = """
-Tu es un assistant expert en logistique.  
-Tu dois extraire d’un bon de livraison PDF (souvent multi-pages) un tableau synthétique des produits reçus, en respectant absolument le total global officiel affiché en fin de document.
 
-Pour chaque produit, ne retiens que :
-- Référence (参考编号)
-- Produit (产品名称)
-- Nombre de colis (箱数)
-- Nombre de pièces par colis (每箱件数)
-- Total de pièces (总件数) = Nombre de colis × Nombre de pièces par colis
+Ne réponds par aucun texte, aucune explication, aucun commentaire, aucune excuse, aucune remarque sur tes capacités. 
 
-Procédure obligatoire :
-1. Parcours tout le document. Additionne toutes les lignes identiques (même référence et nom).
-2. Calcule le total global de colis que tu as extrait.  
-3. Compare-le strictement au total officiel affiché en fin de document (ce total est 100% fiable).
-4. Si ça ne correspond pas : **réanalyse**, cherche tes erreurs, corrige-les, puis vérifie à nouveau.  
-   Si malgré plusieurs vérifications, l’écart persiste, précise-le dans la colonne "Alerte (警告)" (ex : "Manque 5 colis sur 1V1073DM").
-5. N’inclus aucune colonne ou information superflue.
+Ta seule mission : extraire et consolider TOUTES les lignes produit d'un bon de livraison (sous forme de texte ou d'image), même sur plusieurs pages, et me les restituer dans un tableau JSON unique, selon ce format :
 
-Format de réponse OBLIGATOIRE :  
-- Un seul tableau JSON, comme ci-dessous.  
-- En-dessous, écris :
-  - "Nombre total de colis extrait : XXX"
-  - "Nombre total de colis officiel (PDF) : XXX"
-
-Exemple :
 [
   {
-    "Référence (参考编号)": "1V1073DM",
-    "Produit (产品名称)": "MESO MASK 50ML POT SPE",
-    "Nombre de colis (箱数)": 384,
-    "Nombre de pièces par colis (每箱件数)": 26,
-    "Total de pièces (总件数)": 9984,
-    "Alerte (警告)": ""
+    "Référence (参考编号)": "",
+    "Produit (产品名称)": "",
+    "Nombre de colis (箱数)": 0,
+    "Nombre de pièces par colis (每箱件数)": 0,
+    "Total de pièces (总件数)": 0
   }
 ]
-Nombre total de colis extrait : 392  
-Nombre total de colis officiel (PDF) : 392
 
-**Ne réponds rien d’autre que ce tableau et ces deux lignes.**
+À la fin du document, trouve le total officiel des colis affiché sur le bon (il est 100% exact), compare-le à la somme des colis de ton extraction, et **corrige toute erreur de lecture jusqu'à correspondance parfaite**.
+
+Si malgré tes corrections, il reste un écart ou une ambiguïté, écris-le UNIQUEMENT dans une colonne "Alerte (警告)" dans le tableau JSON.
+
+**Tu ne dois JAMAIS écrire autre chose que ce tableau JSON.**
 """
 # --- Interface utilisateur ---
 
