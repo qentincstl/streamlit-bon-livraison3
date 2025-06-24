@@ -9,10 +9,8 @@ import fitz
 from PIL import Image
 import re
 
-# Configuration de la page
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 
-# CSS
 st.markdown("""
 <style>
 .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
@@ -24,14 +22,12 @@ st.markdown("""
 
 st.markdown('<h1 class="section-title">Fiche de réception (OCR multi-pages via GPT-4o Vision)</h1>', unsafe_allow_html=True)
 
-# OpenAI Key
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
     st.error("🛑 Ajoutez `OPENAI_API_KEY` dans les Secrets de Streamlit Cloud.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# Fonctions
 def extract_images_from_pdf(pdf_bytes: bytes):
     images = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -48,33 +44,31 @@ def extract_json_block(s: str) -> str:
         raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
     return max(matches, key=len)
 
-# PROMPT GPT
+# PROMPT GPT CORRIGÉ
 prompt = (
     "Tu es un assistant expert en logistique.\n"
-    "Tu analyses un bon de livraison PDF (souvent multi-pages) qui contient une liste de produits livrés.\n"
+    "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
+    "Ta mission est d'extraire les produits reçus et de vérifier les totaux globaux.\n"
     "\n"
-    "Voici les étapes que tu dois suivre précisément :\n"
+    "Étapes à suivre :\n"
     "1. Parcours toutes les pages du document.\n"
-    "2. À la fin du document (généralement en bas), repère les totaux globaux affichés :\n"
+    "2. Repère en bas du document les totaux globaux indiqués s'ils existent :\n"
     "   - Total pièces\n"
-    "   - Total colis (si précisé)\n"
-    "   Note-les comme : \"Total_pieces_document\" et \"Total_colis_document\"\n"
-    "3. Lis chaque ligne de produit du colisage, sans en oublier.\n"
-    "   Pour chaque ligne, extrait : Référence, Produit, Quantité (pièces affichées sur cette ligne)\n"
-    "4. Ne calcule rien à partir de colis ou dimensions. Prends uniquement les quantités visibles.\n"
-    "5. Calcule le total cumulé des pièces et le nombre de lignes (1 ligne = 1 colis)\n"
-    "6. Compare les totaux calculés avec ceux du document.\n"
-    "7. Ajoute une colonne \"Alerte\" si un écart existe.\n"
-    "8. À la fin, ajoute un objet spécial \"Résumé\" comme ceci :\n"
-    "{\"Résumé\": {\"Total_pieces_document\": 10730, \"Total_pieces_calculé\": 10730, \"Total_colis_document\": 392, \"Total_colis_calculé\": 13, \"Écarts\": \"Aucun\"}}\n"
-    "9. Réponds uniquement avec un bloc JSON : [lignes..., {Résumé:{...}}]\n"
+    "   - Total colis (si mentionné)\n"
+    "3. Ensuite, lis toutes les lignes produit, sans en oublier, et extrais :\n"
+    "   - Référence\n"
+    "   - Produit\n"
+    "   - Quantité totale de pièces (uniquement ce qui est écrit sur la ligne)\n"
+    "4. Additionne les quantités extraites et compare-les aux totaux indiqués.\n"
+    "5. Pour chaque ligne, ajoute un champ \"Alerte\" si quelque chose semble incohérent.\n"
+    "6. Formate la réponse uniquement en JSON comme ceci :\n"
+    "[{\"Référence\": \"1V1073DM\", \"Produit\": \"MESO MASK 50ML POT SPE\", \"Quantité\": 837, \"Alerte\": \"\"}]\n"
+    "Ne fournis aucun texte autour. Juste ce tableau JSON."
 )
-
-# Interface
 
 # 1. Import
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Importez votre PDF ou photo de bon de livraison", type=["pdf", "png", "jpg"])
+uploaded = st.file_uploader("Importez votre PDF (multi-pages) ou photo de bon de livraison", type=["pdf", "png", "jpg"])
 if not uploaded:
     st.stop()
 
@@ -91,8 +85,9 @@ for i, img in enumerate(images):
     st.image(img, caption=f"Page {i+1}", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 3. Extraction JSON (multi-page)
+# 3. Extraction JSON
 st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
+
 encoded_images = []
 for img in images:
     buf = io.BytesIO()
@@ -111,20 +106,17 @@ with st.spinner("Analyse complète en cours..."):
         output = response.choices[0].message.content
         output_clean = extract_json_block(output)
         lignes = json.loads(output_clean)
-
-        if isinstance(lignes, dict):  # Cas rare
+        if isinstance(lignes, dict):
             lignes = [lignes]
-
         all_lignes = lignes
-        st.code(output, language="json")
-
+        st.code(output_clean, language="json")
     except Exception as e:
         st.error(f"Erreur pendant l'extraction JSON : {e}")
         st.stop()
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 4. Affichage des résultats
+# 4. Affichage des résultats avec colonnes bilingues
 TRANSLATION_MAP = {
     "Référence": "参考编号",
     "Produit": "产品",
@@ -132,24 +124,17 @@ TRANSLATION_MAP = {
     "Alerte": "警告"
 }
 
-df = pd.DataFrame([l for l in all_lignes if "Résumé" not in l])
-resume_data = next((l["Résumé"] for l in all_lignes if "Résumé" in l), None)
+df = pd.DataFrame(all_lignes)
 
-# Renommer pour FR / CH
+# Renommer colonnes
 df.rename(columns={col: f"{col} / {TRANSLATION_MAP.get(col, col)}" for col in df.columns}, inplace=True)
 
 st.markdown('<div class="card"><div class="section-title">4. Résultats</div>', unsafe_allow_html=True)
 st.dataframe(df, use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 5. Résumé
-if resume_data:
-    st.markdown('<div class="card"><div class="section-title">5. Résumé des Totaux</div>', unsafe_allow_html=True)
-    st.json(resume_data)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# 6. Export Excel
-st.markdown('<div class="card"><div class="section-title">6. Export Excel</div>', unsafe_allow_html=True)
+# 5. Export Excel
+st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
     df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
