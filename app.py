@@ -67,7 +67,7 @@ prompt = (
     "Ta mission : lire TOUTES les lignes produit et extraire :\n"
     "- Référence\n"
     "- Produit\n"
-    - "Quantité (exactement comme sur la ligne)\n"
+    "- Quantité (exactement comme sur la ligne)\n"
     "- Page\n"
     "\n"
     "À la fin du document, il y a un total général de pièces : ici il est de **10730**.\n"
