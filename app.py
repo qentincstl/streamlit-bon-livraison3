@@ -64,6 +64,7 @@ def extract_json_block(s: str) -> str:
 # PROMPT FORTIFIÉ
 prompt = (
     "Tu reçois un bon de livraison multi-pages sous forme de PDF.\n"
+  Tu dois absolument lire toutes les pages, même si elles semblent identiques ou vides. Aucune page ne doit être ignorée.
     "Ta mission : lire TOUTES les lignes produit et extraire :\n"
     "- Référence\n"
     "- Produit\n"
