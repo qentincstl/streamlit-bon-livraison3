@@ -133,6 +133,20 @@ total_calcule = df["Quantité"].sum()
 st.dataframe(df, use_container_width=True)
 st.markdown(f"🧮 **Total calculé des pièces : {int(total_calcule)}**")
 st.markdown('</div>', unsafe_allow_html=True)
+# Après création du DataFrame :
+from collections import Counter
+
+# Liste des quantités détectées
+valeurs = df["Quantité"].astype(str)
+compte = Counter(valeurs)
+
+# Détecter les cas isolés (erreurs probables)
+for q in compte:
+    if compte[q] == 1 and len(q) >= 3 and q[-2:] in compte:
+        suspect = q
+        correct = q[-2:]
+        df.loc[df["Quantité"] == int(suspect), "Alerte"] += f" Corrigé de {suspect} vers {correct};"
+        df.loc[df["Quantité"] == int(suspect), "Quantité"] = int(correct)
 
 # Export
 st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
