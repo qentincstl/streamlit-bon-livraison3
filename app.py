@@ -63,25 +63,28 @@ def extract_json_block(s: str) -> str:
 
 # PROMPT FORTIFIÉ
 prompt = (
-    "Tu reçois un bon de livraison sous forme d’image ou PDF, parfois sur plusieurs pages.\n"
-    "Ta tâche est simple : lire chaque ligne contenant un produit et extraire les informations suivantes :\n"
+    "Tu reçois un bon de livraison multi-pages sous forme de PDF.\n"
+    "Ta mission : lire TOUTES les lignes produit et extraire :\n"
     "- Référence\n"
     "- Produit\n"
-    "- Quantité (exactement comme elle apparaît)\n"
-    "- Numéro de page\n"
+    - "Quantité (exactement comme sur la ligne)\n"
+    "- Page\n"
     "\n"
-    "Ne modifie rien, ne corrige rien, ne fais aucun calcul.\n"
-    "Si une ligne semble répétée, garde-la quand même.\n"
-    "Si une quantité est illisible ou douteuse, écris « ? ».\n"
+    "À la fin du document, il y a un total général de pièces : ici il est de **10730**.\n"
+    "Tu dois additionner toutes les quantités extraites. Tant que ce total est différent de 10730, recommence ta lecture.\n"
     "\n"
-    "Réponds uniquement avec un tableau JSON sous ce format :\n"
+    "⚠️ Ne fusionne pas les lignes similaires, même si les références sont identiques.\n"
+    "⚠️ Ne copie pas de quantité d'une ligne à l’autre. Ne fais aucune hypothèse.\n"
+    "⚠️ Si une quantité est illisible, mets « ? » et continue la ligne, mais ne l’ajoute pas dans le total.\n"
+    "\n"
+    "Lorsque la somme des quantités extraites est bien 10730, rends la réponse finale sous forme d’un tableau JSON comme ceci :\n"
     "[\n"
-    "  {\"Référence\": \"ABC123\", \"Produit\": \"Nom produit\", \"Quantité\": \"48\", \"Page\": 1},\n"
-    "  {\"Référence\": \"XYZ456\", \"Produit\": \"Autre produit\", \"Quantité\": \"?\", \"Page\": 2}\n"
+    "  {\"Référence\": \"1V1073DM\", \"Produit\": \"MESO MASK 50ML POT SPE\", \"Quantité\": \"837\", \"Page\": 1},\n"
+    "  {\"Référence\": \"1V1073DM\", \"Produit\": \"MESO MASK 50ML POT SPE\", \"Quantité\": \"26\", \"Page\": 1},\n"
+    "  {\"Référence\": \"1V1463\", \"Produit\": \"NCEF REVERSE POT 50ML\", \"Quantité\": \"150\", \"Page\": 2}\n"
     "]\n"
-    "Aucun texte autour. Juste le tableau JSON."
+    "Ne fournis aucun texte autour du JSON."
 )
-
 # Interface utilisateur
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
 uploaded = st.file_uploader("Importez votre PDF ou photo", key="file_uploader")
