@@ -46,24 +46,40 @@ def extract_json_block(s: str) -> str:
 
 # PROMPT GPT CORRIGÉ
 prompt = (
-    "Tu es un assistant expert en logistique.\n"
-    "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
-    "Ta mission est d'extraire les produits reçus et de vérifier les totaux globaux.\n"
+    # CONTEXTE
+    "Tu es un assistant OCR/logistique. Tu reçois un bon de livraison multi-pages (PDF ou images).\n"
+    "Ta mission est de TRANSCRIRE toutes les lignes produit exactement comme elles apparaissent, "
+    "puis de vérifier les totaux globaux indiqués dans le document.\n"
     "\n"
-    "Étapes à suivre :\n"
-    "1. Parcours toutes les pages du document.\n"
-    "2. Repère en bas du document les totaux globaux indiqués s'ils existent :\n"
-    "   - Total pièces\n"
-    "   - Total colis (si mentionné)\n"
-    "3. Ensuite, lis toutes les lignes produit, sans en oublier, et extrais :\n"
-    "   - Référence\n"
-    "   - Produit\n"
-    "   - Quantité totale de pièces (uniquement ce qui est écrit sur la ligne)\n"
-    "4. Additionne les quantités extraites et compare-les aux totaux indiqués.\n"
-    "5. Pour chaque ligne, ajoute un champ \"Alerte\" si quelque chose semble incohérent.\n"
-    "6. Formate la réponse uniquement en JSON comme ceci :\n"
-    "[{\"Référence\": \"1V1073DM\", \"Produit\": \"MESO MASK 50ML POT SPE\", \"Quantité\": 837, \"Alerte\": \"\"}]\n"
-    "Ne fournis aucun texte autour. Juste ce tableau JSON."
+    # RÈGLES GÉNÉRALES – NE JAMAIS INTERPRÉTER
+    "─ Reproduis chaque ligne visible, même si elle semble identique à une autre.\n"
+    "─ Ne déduis rien, ne regroupe rien, ne corrige rien : tu recopies.\n"
+    "─ S’il existe deux nombres dans la même cellule (imprimé + manuscrit), "
+    "recopie les DEUX en les séparant par « / ».\n"
+    "─ Si une ligne est illisible, créée une entrée avec \"?\" et mets 'À vérifier' dans Alerte.\n"
+    "\n"
+    # ÉTAPES
+    "Étapes :\n"
+    "1. Parcours toutes les pages dans l’ordre (page 1 → N).\n"
+    "2. Pour chaque ligne produit détectée, extraits exactement :\n"
+    "   • Référence   • Produit   • Quantité (telle qu’elle apparaît)   • Page   • Alerte (vide par défaut)\n"
+    "3. À LA FIN du document, repère le bloc récapitulatif (Total pièces et éventuellement Total colis).\n"
+    "4. Additionne les quantités recopiées et compare aux totaux trouvés ;\n"
+    "   s’il y a un écart, inscris 'Écart total' dans la colonne Alerte de TOUTES les lignes.\n"
+    "\n"
+    # EXEMPLE pour qu’il ne saute pas les doublons
+    "Exemple : si deux lignes consécutives sont :\n"
+    "  1V1073DM  MESO MASK 50ML  837\n"
+    "  1V1073DM  MESO MASK 50ML  837\n"
+    "tu dois rendre DEUX entrées distinctes, pas une seule.\n"
+    "\n"
+    # FORMAT DE SORTIE
+    "Réponds uniquement avec un JSON array, dans cet EXACT format :\n"
+    "[\n"
+    "  {\"Référence\":\"1V1073DM\",\"Produit\":\"MESO MASK 50ML POT SPE\",\"Quantité\":\"837\",\"Page\":1,\"Alerte\":\"\"},\n"
+    "  {\"Référence\":\"1V1073DM\",\"Produit\":\"MESO MASK 50ML POT SPE\",\"Quantité\":\"26\",\"Page\":1,\"Alerte\":\"\"}\n"
+    "]\n"
+    "Aucun texte avant ou après le JSON."
 )
 
 # 1. Import
