@@ -139,6 +139,21 @@ TRANSLATION_MAP = {
     "Quantité": "数量",
     "Alerte": "警告"
 }
+# --- Vérification simple du nombre de lignes extraites ---
+expected_lines = sum(1 for p in images for _ in [0])  # facultatif : si tu connais le nb par page
+extracted = len(df)
+st.info(f"🚚 Lignes extraites : {extracted}")
+
+# Affiche un avertissement si GPT a sauté des lignes
+if expected_lines and extracted < expected_lines:
+    st.warning("⚠️ Il manque peut-être des lignes. Vérifiez le document ou relancez l’analyse.")
+
+# --- Vérification du total pièces vs total trouvé par GPT (s'il l'a mis à la fin) ---
+if "Total pièces" in df.columns:
+    total_calcule = df["Quantité / 数量"].astype(str).str.replace(",", "").astype(float).sum()
+    total_document = df["Total pièces"].iloc[0]     # supposé fourni par GPT dans la dernière ligne
+    if total_calcule != total_document:
+        st.error(f"❌ Écart détecté : {total_calcule} calculé vs {total_document} indiqué.")
 
 df = pd.DataFrame(all_lignes)
 
