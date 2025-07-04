@@ -8,6 +8,7 @@ import hashlib
 import fitz
 from PIL import Image
 import re
+from collections import Counter
 
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 
@@ -23,7 +24,7 @@ st.markdown('<h1 class="section-title">Fiche de réception (OCR multi-pages via 
 
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
-    st.error("🛑 Ajoutez `OPENAI_API_KEY` dans les Secrets de Streamlit Cloud.")
+    st.error("🚩 Ajoutez `OPENAI_API_KEY` dans les Secrets de Streamlit Cloud.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
@@ -61,15 +62,15 @@ def extract_json_block(s: str) -> str:
         raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
     return max(matches, key=len)
 
-# PROMPT FORTIFIÉ
-prompt = (
- Tu es un assistant logistique expert. Je vais te fournir un bon de livraison en PDF.
+# PROMPT
+prompt = """
+Tu es un assistant logistique expert. Je vais te fournir un bon de livraison en PDF.
 
 Voici les règles que tu dois absolument suivre :
 
 ---
 
-🎯 OBJECTIF :
+🌟 OBJECTIF :
 1. Extraire le **total des quantités** indiqué dans le document (souvent à la ligne `TOTAL ...` ou `Total Unité`).
 2. Reconstituer un tableau avec les colonnes suivantes, en **français + chinois** :
    - Référence produit / 产品参考
@@ -84,38 +85,21 @@ Voici les règles que tu dois absolument suivre :
 
 ---
 
-📌 DÉTAILS TECHNIQUES À RESPECTER :
+📉 DÉTAILS TECHNIQUES :
 - Une ligne avec une référence et une quantité = 1 carton.
 - Plusieurs lignes peuvent partager la même référence : tu dois les **regrouper**.
-- Certaines lignes (notamment vers la fin du document) contiennent **plusieurs produits avec différentes références** → **traite chaque ligne séparément**.
-- Tu dois inclure **toutes** les lignes où une **référence produit** précède une **quantité numérique**.
-- À la fin, affiche :
-   - ✅ Le **tableau récapitulatif**, avec :
-     - Une **ligne supplémentaire à la fin** du tableau avec le **total global** :
-       - Total cartons / 箱数总计
-       - Total produits / 产品总数
-   - Le **total calculé**
-   - Une mention : ✅ "Total exact" ou ❌ "Total incorrect"
+- Certaines lignes (notamment vers la fin du document) contiennent **plusieurs produits** avec références différentes : **traite chaque ligne séparément**.
+- Inclue **toutes** les lignes où une référence précède une quantité.
+- Sors la réponse au format JSON suivant :
+[
+  {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108},
+  ...
+  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": 4296}
+]
 
----
+✅ Total exact si et seulement si la somme des quantités correspond au total du document.
+"""
 
-🧾 EXEMPLE ATTENDU :
-
-Total indiqué dans le document : **4296**
-
-| Référence produit / 产品参考 | Nombre de cartons / 箱数 | Nombre de produits / 产品数量 |
-|-----------------------------|---------------------------|-------------------------------|
-| 108LP MAJIREL...            | 1                         | 108                           |
-| ...                         | ...                       | ...                           |
-| **Total / 合计**             | **62**                    | **4296**                      |
-
-✅ Total exact (4296)
-
----
-
-❗ Ne t'arrête que lorsque le tableau correspond **exactement** au total.
-)
-# Interface utilisateur
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
 uploaded = st.file_uploader("Importez votre PDF ou photo", key="file_uploader")
 if not uploaded:
@@ -124,17 +108,14 @@ file_bytes = uploaded.getvalue()
 hash_md5 = hashlib.md5(file_bytes).hexdigest()
 st.markdown(f'<div class="card">Fichier : {uploaded.name} — Hash MD5 : {hash_md5}</div>', unsafe_allow_html=True)
 
-# Extraction des images
 ext = uploaded.name.lower().rsplit('.', 1)[-1]
 images = extract_images_from_pdf(file_bytes) if ext == 'pdf' else [Image.open(io.BytesIO(file_bytes))]
 
-# Aperçu
 st.markdown('<div class="card"><div class="section-title">2. Aperçu du document</div>', unsafe_allow_html=True)
 for i, img in enumerate(images):
     st.image(img, caption=f"Page {i+1}", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Analyse
 st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
 all_lignes = []
 for i, img in enumerate(images):
@@ -155,37 +136,28 @@ for i, img in enumerate(images):
         st.error(f"❌ Erreur d’extraction page {i+1}")
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Affichage
 st.markdown('<div class="card"><div class="section-title">4. Résultats</div>', unsafe_allow_html=True)
 df = pd.DataFrame(all_lignes)
-df["Quantité"] = pd.to_numeric(df["Quantité"], errors="coerce")
-total_calcule = df["Quantité"].sum()
+
+try:
+    df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
+    valeurs = df["Nombre de produits / 产品数量"].astype(str)
+    compte = Counter(valeurs)
+except Exception as e:
+    st.warning(f"Erreur pendant la conversion ou la vérification des quantités : {e}")
+
+total_calcule = df["Nombre de produits / 产品数量"].sum()
 st.dataframe(df, use_container_width=True)
-st.markdown(f"🧮 **Total calculé des pièces : {int(total_calcule)}**")
+st.markdown(f"🧶 **Total calculé des produits : {int(total_calcule)} / 产品总数**")
 st.markdown('</div>', unsafe_allow_html=True)
-# Après création du DataFrame :
-from collections import Counter
 
-# Liste des quantités détectées
-valeurs = df["Quantité"].astype(str)
-compte = Counter(valeurs)
-
-# Détecter les cas isolés (erreurs probables)
-for q in compte:
-    if compte[q] == 1 and len(q) >= 3 and q[-2:] in compte:
-        suspect = q
-        correct = q[-2:]
-        df.loc[df["Quantité"] == int(suspect), "Alerte"] += f" Corrigé de {suspect} vers {correct};"
-        df.loc[df["Quantité"] == int(suspect), "Quantité"] = int(correct)
-
-# Export
 st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
     df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
 out.seek(0)
 st.download_button(
-    "📥 Télécharger les données au format Excel",
+    "📅 Télécharger les données au format Excel",
     data=out,
     file_name="bon_de_livraison_corrige.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
