@@ -94,10 +94,8 @@ Voici les règles que tu dois absolument suivre :
 [
   {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108},
   ...
+  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": 4296}
 ]
-
-Ajoute une **seule ligne finale** :
-  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": TOTAL_FINAL}
 
 ✅ Total exact si et seulement si la somme des quantités correspond au total du document.
 """
@@ -129,7 +127,7 @@ for i, img in enumerate(images):
                 output = extract_json_with_gpt4o(img, prompt)
                 output_clean = extract_json_block(output)
                 lignes = json.loads(output_clean)
-                all_lignes.extend([l for l in lignes if l.get("Référence produit / 产品参考") != "Total / 合计"])
+                all_lignes.extend(lignes)
                 success = True
                 break
             except Exception:
@@ -143,21 +141,14 @@ df = pd.DataFrame(all_lignes)
 
 try:
     df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
-    df["Nombre de cartons / 箱数"] = pd.to_numeric(df["Nombre de cartons / 箱数"], errors="coerce")
+    valeurs = df["Nombre de produits / 产品数量"].astype(str)
+    compte = Counter(valeurs)
 except Exception as e:
-    st.warning(f"Erreur pendant la conversion des quantités : {e}")
+    st.warning(f"Erreur pendant la conversion ou la vérification des quantités : {e}")
 
-# Ajout de la ligne TOTAL en bas
-total_row = {
-    "Référence produit / 产品参考": "Total / 合计",
-    "Nombre de cartons / 箱数": int(df["Nombre de cartons / 箱数"].sum()),
-    "Nombre de produits / 产品数量": int(df["Nombre de produits / 产品数量"].sum())
-}
-df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
-
+total_calcule = df["Nombre de produits / 产品数量"].sum()
 st.dataframe(df, use_container_width=True)
-
-st.markdown(f"🧶 **Total calculé des produits : {int(total_row['Nombre de produits / 产品数量'])} / 产品总数**")
+st.markdown(f"🧶 **Total calculé des produits : {int(total_calcule)} / 产品总数**")
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
