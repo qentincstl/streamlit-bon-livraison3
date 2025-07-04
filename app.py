@@ -63,28 +63,57 @@ def extract_json_block(s: str) -> str:
 
 # PROMPT FORTIFIÉ
 prompt = (
- "Tu reçois un bon de livraison multi-pages sous forme de PDF.\n"
-  "Tu dois absolument lire toutes les pages, même si elles semblent identiques ou vides. Aucune page ne doit être ignorée."
-    "Ta mission : lire TOUTES les lignes produit et extraire :\n"
-    "- Référence\n"
-    "- Produit\n"
-    "- Quantité (exactement comme sur la ligne)\n"
-    "- Page\n"
-    "\n"
-    "À la fin du document, il y a un total général de pièces : ici il est de **10730**.\n"
-    "Tu dois additionner toutes les quantités extraites. Tant que ce total est différent de 10730, recommence ta lecture.\n"
-    "\n"
-    "⚠️ Ne fusionne pas les lignes similaires, même si les références sont identiques.\n"
-    "⚠️ Ne copie pas de quantité d'une ligne à l’autre. Ne fais aucune hypothèse.\n"
-    "⚠️ Si une quantité est illisible, mets « ? » et continue la ligne, mais ne l’ajoute pas dans le total.\n"
-    "\n"
-    "Lorsque la somme des quantités extraites est bien 10730, rends la réponse finale sous forme d’un tableau JSON comme ceci :\n"
-    "[\n"
-    "  {\"Référence\": \"1V1073DM\", \"Produit\": \"MESO MASK 50ML POT SPE\", \"Quantité\": \"837\", \"Page\": 1},\n"
-    "  {\"Référence\": \"1V1073DM\", \"Produit\": \"MESO MASK 50ML POT SPE\", \"Quantité\": \"26\", \"Page\": 1},\n"
-    "  {\"Référence\": \"1V1463\", \"Produit\": \"NCEF REVERSE POT 50ML\", \"Quantité\": \"150\", \"Page\": 2}\n"
-    "]\n"
-    "Ne fournis aucun texte autour du JSON."
+ Tu es un assistant logistique expert. Je vais te fournir un bon de livraison en PDF.
+
+Voici les règles que tu dois absolument suivre :
+
+---
+
+🎯 OBJECTIF :
+1. Extraire le **total des quantités** indiqué dans le document (souvent à la ligne `TOTAL ...` ou `Total Unité`).
+2. Reconstituer un tableau avec les colonnes suivantes, en **français + chinois** :
+   - Référence produit / 产品参考
+   - Nombre de cartons / 箱数
+   - Nombre de produits / 产品数量
+3. Vérifier que la **somme des quantités dans le tableau = total indiqué dans le document**.
+4. **TANT QUE LA SOMME NE CORRESPOND PAS**, tu dois :
+   - Recontrôler chaque ligne de produit.
+   - Ne **rien déduire** ou estimer.
+   - **Corriger ou compléter** le tableau.
+   - Recommencer la vérification jusqu’à ce que le total soit **parfaitement exact**.
+
+---
+
+📌 DÉTAILS TECHNIQUES À RESPECTER :
+- Une ligne avec une référence et une quantité = 1 carton.
+- Plusieurs lignes peuvent partager la même référence : tu dois les **regrouper**.
+- Certaines lignes (notamment vers la fin du document) contiennent **plusieurs produits avec différentes références** → **traite chaque ligne séparément**.
+- Tu dois inclure **toutes** les lignes où une **référence produit** précède une **quantité numérique**.
+- À la fin, affiche :
+   - ✅ Le **tableau récapitulatif**, avec :
+     - Une **ligne supplémentaire à la fin** du tableau avec le **total global** :
+       - Total cartons / 箱数总计
+       - Total produits / 产品总数
+   - Le **total calculé**
+   - Une mention : ✅ "Total exact" ou ❌ "Total incorrect"
+
+---
+
+🧾 EXEMPLE ATTENDU :
+
+Total indiqué dans le document : **4296**
+
+| Référence produit / 产品参考 | Nombre de cartons / 箱数 | Nombre de produits / 产品数量 |
+|-----------------------------|---------------------------|-------------------------------|
+| 108LP MAJIREL...            | 1                         | 108                           |
+| ...                         | ...                       | ...                           |
+| **Total / 合计**             | **62**                    | **4296**                      |
+
+✅ Total exact (4296)
+
+---
+
+❗ Ne t'arrête que lorsque le tableau correspond **exactement** au total.
 )
 # Interface utilisateur
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
