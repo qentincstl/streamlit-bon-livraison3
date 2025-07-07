@@ -128,8 +128,6 @@ for i, img in enumerate(images):
                 output = extract_json_with_gpt4o(img, prompt)
                 output_clean = extract_json_block(output)
                 lignes = json.loads(output_clean)
-                # Retirer les lignes "Total / 合计" intermédiaires (de fin de page)
-                lignes = [ligne for ligne in lignes if ligne.get("Référence produit / 产品参考") != "Total / 合计"]
                 all_lignes.extend(lignes)
                 success = True
                 break
@@ -153,11 +151,9 @@ except Exception as e:
 if "Vérification / 校验" not in df.columns:
     df["Vérification / 校验"] = ""
 
-# Calcul total général
-total_general = df["Nombre de produits / 产品数量"].sum()
-
+total_calcule = df["Nombre de produits / 产品数量"].sum()
 st.dataframe(df, use_container_width=True)
-st.markdown(f"🧮 **Total cumulé des produits toutes pages : {int(total_general)} / 产品总数**")
+st.markdown(f"🧶 **Total calculé des produits : {int(total_calcule)} / 产品总数**")
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
