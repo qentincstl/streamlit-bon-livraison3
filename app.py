@@ -151,9 +151,20 @@ except Exception as e:
 if "Vérification / 校验" not in df.columns:
     df["Vérification / 校验"] = ""
 
+# Calcul total général
 total_calcule = df["Nombre de produits / 产品数量"].sum()
+
+# Ajout d'une ligne vide puis du total consolidé
+df = pd.concat([df, pd.DataFrame([{"Référence produit / 产品参考": "", "Nombre de cartons / 箱数": "", "Nombre de produits / 产品数量": "", "Vérification / 校验": ""}])], ignore_index=True)
+df = pd.concat([df, pd.DataFrame([{
+    "Référence produit / 产品参考": "TOTAL GÉNÉRAL / 总合计",
+    "Nombre de cartons / 箱数": "",
+    "Nombre de produits / 产品数量": total_calcule,
+    "Vérification / 校验": ""
+}])], ignore_index=True)
+
 st.dataframe(df, use_container_width=True)
-st.markdown(f"🧶 **Total calculé des produits : {int(total_calcule)} / 产品总数**")
+st.markdown(f"🧮 **Total calculé des produits : {int(total_calcule)} / 产品总数**")
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
