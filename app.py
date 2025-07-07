@@ -76,6 +76,7 @@ Voici les règles que tu dois absolument suivre :
    - Référence produit / 产品参考
    - Nombre de cartons / 箱数
    - Nombre de produits / 产品数量
+   - Vérification / 校验
 3. Vérifier que la **somme des quantités dans le tableau = total indiqué dans le document**.
 4. **TANT QUE LA SOMME NE CORRESPOND PAS**, tu dois :
    - Recontrôler chaque ligne de produit.
@@ -92,12 +93,12 @@ Voici les règles que tu dois absolument suivre :
 - Inclue **toutes** les lignes où une référence précède une quantité.
 - Sors la réponse au format JSON suivant :
 [
-  {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108},
+  {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108, "Vérification / 校验": ""},
   ...
-  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": 4296}
+  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": 4296, "Vérification / 校验": ""}
 ]
 
-✅ Total exact si et seulement si la somme des quantités correspond au total du document.
+📄 Total exact si et seulement si la somme des quantités correspond au total du document.
 """
 
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
@@ -145,6 +146,10 @@ try:
     compte = Counter(valeurs)
 except Exception as e:
     st.warning(f"Erreur pendant la conversion ou la vérification des quantités : {e}")
+
+# Ajouter une colonne de vérification vide
+if "Vérification / 校验" not in df.columns:
+    df["Vérification / 校验"] = ""
 
 total_calcule = df["Nombre de produits / 产品数量"].sum()
 st.dataframe(df, use_container_width=True)
