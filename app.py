@@ -1,4 +1,3 @@
-# --- Imports
 import streamlit as st
 import pandas as pd
 import openai
@@ -9,56 +8,30 @@ import hashlib
 import fitz
 from PIL import Image
 import re
+from collections import Counter
 
-# --- Page config
-st.set_page_config(page_title="Fiche de réception GPT", layout="wide", page_icon="📦")
 
-# --- Clé API
-openai.api_key = st.secrets.get("OPENAI_API_KEY", "")
-if not openai.api_key:
-    st.error("Ajoute ta clé OPENAI_API_KEY dans les secrets de Streamlit.")
+
+
+st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
+
+st.markdown("""
+<style>
+  .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
+  .card { background:#fff; padding:1rem; border-radius:0.5rem;
+          box-shadow:0 2px 4px rgba(0,0,0,0.07); margin-bottom:1.5rem; }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<h1 class="section-title">Fiche de réception (OCR multi-pages via GPT-4o Vision)</h1>', unsafe_allow_html=True)
+
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+if not OPENAI_API_KEY:
+    st.error("🚩 Ajoutez `OPENAI_API_KEY` dans les Secrets de Streamlit Cloud.")
     st.stop()
+openai.api_key = OPENAI_API_KEY
 
-# --- PROMPTS
-prompt_strict = """
-Tu es un assistant logistique expert. Je vais te fournir un bon de livraison ou un tableau brut (Excel).
-
-Ton objectif est de :
-1. Extraire les lignes de produits contenant clairement une **référence**, un **nombre de cartons** et une **quantité de produits**.
-2. Reconstituer un tableau structuré avec ces 4 colonnes :
-   - Référence produit / 产品参考
-   - Nombre de cartons / 箱数
-   - Nombre de produits / 产品数量
-   - Vérification / 校验
-3. Calculer la **somme totale** des quantités.
-4. Sors uniquement ce JSON :
-[
-  {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108, "Vérification / 校验": ""},
-  ...
-  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": 4296, "Vérification / 校验": ""}
-]
-⚠️ Ne prends en compte **aucune ligne douteuse** ou ambiguë. Ne fais **aucune déduction**.
-"""
-
-prompt_flexible = """
-Tu es un assistant logistique intelligent. Je vais te fournir un bon de livraison ou un tableau Excel.
-
-Inclus **toutes les lignes** contenant **des éléments logistiques potentiels**, même approximatifs :
-1. Même si une ligne est incomplète ou ambiguë, essaie de l’ajouter.
-2. Ne laisse **aucune ligne de côté** qui pourrait contenir une référence ou une quantité.
-3. Structure la réponse comme ceci :
-[
-  {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108, "Vérification / 校验": ""},
-  ...
-  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": 4296, "Vérification / 校验": ""}
-]
-Même si tu n'es pas certain, **inclus la ligne**.
-
-Ensuite, compare les résultats avec ceux que tu aurais donnés dans un prompt strict, indique quelles lignes sont nouvelles ou corrigées, et vérifie si le total devient correct. Ajoute uniquement ce qui est nécessaire pour corriger l’erreur du strict.
-"""
-
-# --- Fonctions
-def extract_images_from_pdf(pdf_bytes):
+def extract_images_from_pdf(pdf_bytes: bytes):
     images = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page in doc:
@@ -67,7 +40,7 @@ def extract_images_from_pdf(pdf_bytes):
         images.append(img)
     return images
 
-def extract_json_from_image(img, prompt):
+def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
@@ -85,78 +58,117 @@ def extract_json_from_image(img, prompt):
     )
     return response.choices[0].message.content
 
-def extract_json_from_text(text, prompt):
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt + "\n\n" + text}]
-    )
-    return response.choices[0].message.content
-
-def extract_json_block(s):
-    json_regex = re.compile(r'(\[.*?\])', re.DOTALL)
+def extract_json_block(s: str) -> str:
+    json_regex = re.compile(r'(\[.*?\]|\{.*?\})', re.DOTALL)
     matches = json_regex.findall(s)
     if not matches:
-        raise ValueError("Aucun JSON trouvé.")
+        raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
     return max(matches, key=len)
 
-# --- UI
-st.title("📦 Fiche de réception - Analyse GPT multi-prompts")
-uploaded = st.file_uploader("Dépose ton fichier PDF, image ou Excel :", type=["pdf", "png", "jpg", "jpeg", "xls", "xlsx"])
+# PROMPT
+prompt = """
+Tu es un assistant logistique expert. Je vais te fournir un bon de livraison en PDF.
+
+Voici les règles que tu dois absolument suivre :
+
+---
+
+🌟 OBJECTIF :
+1. Extraire le **total des quantités** indiqué dans le document (souvent à la ligne `TOTAL ...` ou `Total Unité`).
+2. Reconstituer un tableau avec les colonnes suivantes, en **français + chinois** :
+   - Référence produit / 产品参考
+   - Nombre de cartons / 箱数
+   - Nombre de produits / 产品数量
+   - Vérification / 校验
+3. Vérifier que la **somme des quantités dans le tableau = total indiqué dans le document**.
+4. **TANT QUE LA SOMME NE CORRESPOND PAS**, tu dois :
+   - Recontrôler chaque ligne de produit.
+   - Ne **rien déduire** ou estimer.
+   - **Corriger ou compléter** le tableau.
+   - Recommencer la vérification jusqu’à ce que le total soit **parfaitement exact**.
+
+---
+
+📉 DÉTAILS TECHNIQUES :
+- Une ligne avec une référence et une quantité = 1 carton.
+- Plusieurs lignes peuvent partager la même référence : tu dois les **regrouper**.
+- Certaines lignes (notamment vers la fin du document) contiennent **plusieurs produits** avec références différentes : **traite chaque ligne séparément**.
+- Inclue **toutes** les lignes où une référence précède une quantité.
+- Sors la réponse au format JSON suivant :
+[
+  {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108, "Vérification / 校验": ""},
+  ...
+  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": 4296, "Vérification / 校验": ""}
+]
+
+📄 Total exact si et seulement si la somme des quantités correspond au total du document.
+"""
+
+st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
+uploaded = st.file_uploader("Importez votre PDF ou photo", key="file_uploader")
 if not uploaded:
     st.stop()
+file_bytes = uploaded.getvalue()
+hash_md5 = hashlib.md5(file_bytes).hexdigest()
+st.markdown(f'<div class="card">Fichier : {uploaded.name} — Hash MD5 : {hash_md5}</div>', unsafe_allow_html=True)
 
-file_bytes = uploaded.read()
-ext = uploaded.name.split(".")[-1].lower()
-st.caption(f"Fichier : {uploaded.name}")
+ext = uploaded.name.lower().rsplit('.', 1)[-1]
+images = extract_images_from_pdf(file_bytes) if ext == 'pdf' else [Image.open(io.BytesIO(file_bytes))]
 
-# --- Analyse double (strict + flexible)
-json_strict, json_flexible = [], []
+st.markdown('<div class="card"><div class="section-title">2. Aperçu du document</div>', unsafe_allow_html=True)
+for i, img in enumerate(images):
+    st.image(img, caption=f"Page {i+1}", use_container_width=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-if ext in ["pdf", "png", "jpg", "jpeg"]:
-    images = extract_images_from_pdf(file_bytes) if ext == "pdf" else [Image.open(io.BytesIO(file_bytes))]
-    for img in images:
-        try:
-            out1 = extract_json_block(extract_json_from_image(img, prompt_strict))
-            json_strict += json.loads(out1)
+st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
+all_lignes = []
+for i, img in enumerate(images):
+    st.markdown(f"##### Analyse page {i+1} …")
+    success, output_clean = False, None
+    with st.spinner("Analyse en cours..."):
+        for attempt in range(6):
+            try:
+                output = extract_json_with_gpt4o(img, prompt)
+                output_clean = extract_json_block(output)
+                lignes = json.loads(output_clean)
+                all_lignes.extend(lignes)
+                success = True
+                break
+            except Exception:
+                continue
+    if not success:
+        st.error(f"❌ Erreur d’extraction page {i+1}")
+st.markdown('</div>', unsafe_allow_html=True)
 
-            out2 = extract_json_block(extract_json_from_image(img, prompt_flexible))
-            json_flexible += json.loads(out2)
-        except Exception as e:
-            st.error(f"Erreur : {e}")
+st.markdown('<div class="card"><div class="section-title">4. Résultats</div>', unsafe_allow_html=True)
+df = pd.DataFrame(all_lignes)
 
-elif ext in ["xls", "xlsx"]:
-    df_excel = pd.read_excel(io.BytesIO(file_bytes))
-    text = df_excel.to_csv(index=False, sep="\t")
-    try:
-        out1 = extract_json_block(extract_json_from_text(text, prompt_strict))
-        json_strict += json.loads(out1)
+try:
+    df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
+    valeurs = df["Nombre de produits / 产品数量"].astype(str)
+    compte = Counter(valeurs)
+except Exception as e:
+    st.warning(f"Erreur pendant la conversion ou la vérification des quantités : {e}")
 
-        out2 = extract_json_block(extract_json_from_text(text, prompt_flexible))
-        json_flexible += json.loads(out2)
-    except Exception as e:
-        st.error(f"Erreur : {e}")
+# Ajouter une colonne de vérification vide
+if "Vérification / 校验" not in df.columns:
+    df["Vérification / 校验"] = ""
 
-# --- Affichage
-if json_strict:
-    df_strict = pd.DataFrame(json_strict)
-    df_strict["Nombre de produits / 产品数量"] = pd.to_numeric(df_strict["Nombre de produits / 产品数量"], errors="coerce")
-    total_calcule = df_strict["Nombre de produits / 产品数量"].sum()
-    st.subheader("🔢 Résultat - Prompt strict")
-    st.dataframe(df_strict, use_container_width=True)
-    st.markdown(f"**Total calculé (strict) : {int(total_calcule)}**")
+total_calcule = df["Nombre de produits / 产品数量"].sum()
+st.dataframe(df, use_container_width=True)
+st.markdown(f"🧶 **Total calculé des produits : {int(total_calcule)} / 产品总数**")
+st.markdown('</div>', unsafe_allow_html=True)
 
-if json_flexible:
-    df_flex = pd.DataFrame(json_flexible)
-    df_flex["Nombre de produits / 产品数量"] = pd.to_numeric(df_flex["Nombre de produits / 产品数量"], errors="coerce")
-    total_flex = df_flex["Nombre de produits / 产品数量"].sum()
-    st.subheader("🔄 Résultat - Prompt libre")
-    st.dataframe(df_flex, use_container_width=True)
-    st.markdown(f"**Total calculé (flexible) : {int(total_flex)}**")
-
-# Export strict par défaut
-if not df_strict.empty:
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        df_strict.to_excel(writer, index=False, sheet_name="Strict")
-    out.seek(0)
-    st.download_button("📆 Télécharger Excel (strict)", data=out, file_name="resultat_strict.xlsx")
+st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
+out = io.BytesIO()
+with pd.ExcelWriter(out, engine="openpyxl") as writer:
+    df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
+out.seek(0)
+st.download_button(
+    "📅 Télécharger les données au format Excel",
+    data=out,
+    file_name="bon_de_livraison_corrige.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
+st.markdown('</div>', unsafe_allow_html=True)
