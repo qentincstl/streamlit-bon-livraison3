@@ -8,16 +8,15 @@ import hashlib
 import fitz
 from PIL import Image
 import re
-from collections import Counter
 
-# Pour convertir un DataFrame Excel en PDF
+# Conversion Excel→PDF
 from reportlab.platypus import SimpleDocTemplate, Table
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 
 def excel_to_pdf_bytes(df: pd.DataFrame) -> bytes:
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4)
     data = [list(df.columns)] + df.values.tolist()
     table = Table(data, repeatRows=1)
     table.setStyle([
@@ -26,32 +25,65 @@ def excel_to_pdf_bytes(df: pd.DataFrame) -> bytes:
         ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
     ])
     doc.build([table])
-    buffer.seek(0)
-    return buffer.read()
+    buf.seek(0)
+    return buf.read()
 
-prompt = """
+# Prompt enrichi pour extraction de la désignation et du EAN
+PROMPT = """
 Tu es un assistant logistique expert. Je vais te fournir un bon de livraison en PDF.
-
-Voici les règles que tu dois absolument suivre :
 
 🌟 OBJECTIF :
 1. Extraire le **total des quantités** indiqué dans le document.
-2. Reconstituer un tableau avec les colonnes (français+chinois) :
+2. Reconstituer un tableau avec ces colonnes (français + chinois) :
    - Référence produit / 产品参考
-   - Nombre de cartons  / 箱数
+   - Désignation produit / 产品名称
+   - Code EAN / 条形码
+   - Nombre de cartons / 箱数
    - Nombre de produits / 产品数量
-   - Vérification      / 校验
-3. Vérifier que la somme des quantités = total du document.
-4. Tant que ça ne correspond pas, recontrôler et corriger jusqu’à l’exactitude.
+   - Vérification / 校验
+3. Vérifier que la somme des **Nombre de produits** = total du document.
+4. Si la somme ne correspond pas, recontrôler et corriger jusqu’à l’exactitude.
 
 📉 DÉTAILS TECHNIQUES :
-- Une ligne = 1 carton
-- Grouper les références identiques
-- Traiter chaque produit séparément
-- Sortie en JSON comme montré plus haut.
+- Chaque ligne avec référence + quantité = 1 carton.
+- Grouper les lignes de même référence.
+- Traiter séparément chaque référence/EAN trouvée.
+- Sortie **JSON** :  
+[
+  {
+    "Référence produit / 产品参考": "...",
+    "Désignation produit / 产品名称": "...",
+    "Code EAN / 条形码": "...",
+    "Nombre de cartons / 箱数": 1,
+    "Nombre de produits / 产品数量": 108,
+    "Vérification / 校验": ""
+  },
+  …,
+  {
+    "Référence produit / 产品参考": "Total / 合计",
+    "Désignation produit / 产品名称": "",
+    "Code EAN / 条形码": "",
+    "Nombre de cartons / 箱数": XX,
+    "Nombre de produits / 产品数量": 4296,
+    "Vérification / 校验": ""
+  }
+]
 """
 
-# Configuration Streamlit
+# Password protection
+def check_password():
+    def on_enter():
+        st.session_state["ok"] = (st.session_state["pwd"] == "3DTRADEperso")
+    if "ok" not in st.session_state:
+        st.text_input("🔐 Mot de passe :", type="password", key="pwd", on_change=on_enter)
+        st.stop()
+    if not st.session_state["ok"]:
+        st.text_input("🔐 Mot de passe :", type="password", key="pwd", on_change=on_enter)
+        st.error("Mot de passe incorrect.")
+        st.stop()
+
+check_password()
+
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
@@ -62,129 +94,104 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.markdown('<h1 class="section-title">Fiche de réception (OCR via GPT-4o Vision)</h1>', unsafe_allow_html=True)
 
-# Clé API OpenAI
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
-    st.error("🚩 Ajoutez `OPENAI_API_KEY` dans les Secrets.")
+    st.error("🚩 Définissez OPENAI_API_KEY dans vos Secrets.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# Utils d’extraction
+# PDF→images
 def extract_images_from_pdf(pdf_bytes: bytes):
-    images = []
+    imgs = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page in doc:
         pix = page.get_pixmap(dpi=300)
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
-        images.append(img)
-    return images
+        imgs.append(Image.open(io.BytesIO(pix.tobytes("png"))))
+    return imgs
 
-def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
+# OCR + JSON
+def ocr_to_json(img: Image.Image) -> list:
+    buf = io.BytesIO(); img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
     resp = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text",  "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-            ]
-        }],
-        max_tokens=1500,
-        temperature=0
+        messages=[{"role":"user","content":[{"type":"text","text":PROMPT},
+                                            {"type":"image_url","image_url":{"url":f"data:image/png;base64,{b64}"}}]}],
+        max_tokens=1500, temperature=0
     )
-    return resp.choices[0].message.content
+    out = resp.choices[0].message.content
+    m = re.findall(r'(\[.*\])', out, re.DOTALL)
+    if not m: raise ValueError("Pas de JSON détecté")
+    return json.loads(max(m, key=len))
 
-def extract_json_block(s: str) -> str:
-    blocs = re.findall(r'(\[.*?\]|\{.*?\})', s, re.DOTALL)
-    if not blocs:
-        raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
-    return max(blocs, key=len)
-
-# 1. Upload
-uploaded = st.file_uploader(
-    "Importez votre PDF, votre image ou votre Excel",
-    type=["pdf","png","jpg","jpeg","xls","xlsx"]
-)
+# Upload
+uploaded = st.file_uploader("Importez PDF, image ou Excel", type=["pdf","png","jpg","jpeg","xls","xlsx"])
 if not uploaded:
     st.stop()
-
 file_bytes = uploaded.getvalue()
 hash_md5 = hashlib.md5(file_bytes).hexdigest()
 st.markdown(f'<div class="card">Fichier : {uploaded.name} — MD5 : {hash_md5}</div>', unsafe_allow_html=True)
 
-# 2. Unifier en images
-ext = uploaded.name.lower().rsplit(".",1)[-1]
+# Unifier en images
+ext = uploaded.name.lower().split(".")[-1]
 if ext in ("xls","xlsx"):
-    # lire l'Excel en DataFrame brut
     df_excel = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
-    # convertir en PDF bytes
     pdf_bytes = excel_to_pdf_bytes(df_excel)
-    images = extract_images_from_pdf(pdf_bytes)
+    pages = extract_images_from_pdf(pdf_bytes)
+elif ext == "pdf":
+    pages = extract_images_from_pdf(file_bytes)
 else:
-    if ext == "pdf":
-        images = extract_images_from_pdf(file_bytes)
-    else:
-        images = [Image.open(io.BytesIO(file_bytes))]
+    pages = [Image.open(io.BytesIO(file_bytes))]
 
-# 3. Aperçu
+# Affichage
 st.markdown('<div class="card"><div class="section-title">Aperçu du document</div></div>', unsafe_allow_html=True)
-for i, img in enumerate(images):
+for i,img in enumerate(pages):
     st.image(img, caption=f"Page {i+1}", use_container_width=True)
 
-# 4. Extraction JSON
+# Extraction
 st.markdown('<div class="card"><div class="section-title">Extraction JSON</div></div>', unsafe_allow_html=True)
-all_lignes = []
-for i, img in enumerate(images):
+records = []
+for i,img in enumerate(pages):
     st.markdown(f"##### Analyse page {i+1} …")
-    success = False
-    with st.spinner("Analyse en cours…"):
-        for _ in range(6):
-            try:
-                sortie = extract_json_with_gpt4o(img, prompt)
-                block  = extract_json_block(sortie)
-                lignes = json.loads(block)
-                all_lignes.extend(lignes)
-                success = True
-                break
-            except Exception:
-                continue
-    if not success:
-        st.error(f"❌ Échec extraction page {i+1}")
+    with st.spinner("En cours…"):
+        try:
+            recs = ocr_to_json(img)
+            records.extend(recs)
+        except Exception as e:
+            st.error(f"❌ page {i+1} : {e}")
 
-# 5. Construction du DataFrame
+# DataFrame
 st.markdown('<div class="card"><div class="section-title">Résultats</div></div>', unsafe_allow_html=True)
-df = pd.DataFrame(all_lignes)
+df = pd.DataFrame(records)
 
-# → Insertion de la colonne "Désignation" après la référence produit
-ref_col = "Référence produit / 产品参考"
-if ref_col in df.columns:
-    idx = df.columns.get_loc(ref_col) + 1
-    df.insert(idx, "Désignation", "")
-else:
-    df.insert(0, "Désignation", "")
+# S'assurer des colonnes
+cols = [
+    "Référence produit / 产品参考",
+    "Désignation produit / 产品名称",
+    "Code EAN / 条形码",
+    "Nombre de cartons / 箱数",
+    "Nombre de produits / 产品数量",
+    "Vérification / 校验"
+]
+for c in cols:
+    if c not in df.columns:
+        df[c] = ""
 
-# conversion numérique et colonne de vérif
+# Conversion numérique
 df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
-if "Vérification / 校验" not in df.columns:
-    df["Vérification / 校验"] = ""
 
-total_calcule = df["Nombre de produits / 产品数量"].sum()
-st.dataframe(df, use_container_width=True)
-st.markdown(f"🧶 **Total calculé : {int(total_calcule)}**")
+# Vérif total
+total = df["Nombre de produits / 产品数量"].sum()
+st.dataframe(df[cols], use_container_width=True)
+st.markdown(f"🧶 **Total calculé : {int(total)} / 产品总数**")
 
-# 6. Export Excel
+# Export
 st.markdown('<div class="card"><div class="section-title">Export Excel</div></div>', unsafe_allow_html=True)
 out = io.BytesIO()
-with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
+with pd.ExcelWriter(out, engine="openpyxl") as w:
+    df[cols].to_excel(w, index=False, sheet_name="BON_DE_LIVRAISON")
 out.seek(0)
-st.download_button(
-    "📅 Télécharger le résultat (Excel)",
-    data=out,
-    file_name="bon_de_livraison_corrige.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True
-)
+st.download_button("📅 Télécharger (Excel)", data=out.read(),
+                   file_name="bon_de_livraison.xlsx",
+                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                   use_container_width=True)
