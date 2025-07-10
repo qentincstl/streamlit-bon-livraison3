@@ -9,19 +9,7 @@ import json
 import re
 import hashlib
 
-# — Vérification de mot de passe —
-def check_password():
-    def on_enter():
-        st.session_state["ok"] = (st.session_state["pwd"] == "3DTRADEperso")
-    if "ok" not in st.session_state:
-        st.text_input("🔐 Mot de passe :", type="password", key="pwd", on_change=on_enter)
-        st.stop()
-    if not st.session_state["ok"]:
-        st.text_input("🔐 Mot de passe :", type="password", key="pwd", on_change=on_enter)
-        st.error("Mot de passe incorrect.")
-        st.stop()
 
-check_password()
 
 # — Configuration de la page —
 st.set_page_config(page_title="Extraction colonnes", layout="wide", page_icon="📋")
