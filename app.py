@@ -10,9 +10,53 @@ from PIL import Image
 import re
 from collections import Counter
 
-# --- Configuration de la page ---
-st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
+# ─── Pour convertir un DataFrame Excel en PDF ───
+from reportlab.platypus import SimpleDocTemplate, Table
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
 
+def excel_to_pdf_bytes(df: pd.DataFrame) -> bytes:
+    buffer = io.BytesIO()
+    # Document PDF
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    # Préparer les données (entêtes + lignes)
+    data = [list(df.columns)] + df.values.tolist()
+    table = Table(data, repeatRows=1)
+    table.setStyle([
+        ("GRID",           (0,0), (-1,-1), 0.5, colors.black),
+        ("BACKGROUND",     (0,0), (-1,0),   colors.lightgrey),
+        ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
+    ])
+    doc.build([table])
+    buffer.seek(0)
+    return buffer.read()
+
+# ─── Votre prompt GPT-4o Vision ───
+prompt = """
+Tu es un assistant logistique expert. Je vais te fournir un bon de livraison en PDF.
+
+Voici les règles que tu dois absolument suivre :
+
+---
+🌟 OBJECTIF :
+1. Extraire le **total des quantités** indiqué dans le document.
+2. Reconstituer un tableau avec les colonnes (français+chinois) :
+   - Référence produit / 产品参考
+   - Nombre de cartons  / 箱数
+   - Nombre de produits / 产品数量
+   - Vérification      / 校验
+3. Vérifier que la somme des quantités = total du document.
+4. Tant que ça ne correspond pas, recontrôler et corriger jusqu’à l’exactitude.
+---
+📉 DÉTAILS TECHNIQUES :
+- Une ligne = 1 carton
+- Grouper les références identiques
+- Traiter chaque produit séparément
+- Sortie en JSON comme montré plus haut.
+"""
+
+# ─── Configuration de la page ───
+st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
   .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
@@ -20,18 +64,16 @@ st.markdown("""
           box-shadow:0 2px 4px rgba(0,0,0,0.07); margin-bottom:1.5rem; }
 </style>
 """, unsafe_allow_html=True)
+st.markdown('<h1 class="section-title">Fiche de réception (OCR via GPT-4o Vision)</h1>', unsafe_allow_html=True)
 
-st.markdown('<h1 class="section-title">Fiche de réception (OCR multi-pages via GPT-4o Vision + Excel)</h1>', unsafe_allow_html=True)
-
-# --- Clé API OpenAI ---
+# ─── Clé API ───
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
-    st.error("🚩 Ajoutez `OPENAI_API_KEY` dans les Secrets de Streamlit Cloud.")
+    st.error("🚩 Ajoutez `OPENAI_API_KEY` dans les Secrets.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# --- Fonctions utilitaires ---
-
+# ─── Utils PDF→images & GPT4o → JSON ───
 def extract_images_from_pdf(pdf_bytes: bytes):
     images = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -45,161 +87,98 @@ def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
-    response = openai.chat.completions.create(
+    resp = openai.chat.completions.create(
         model="gpt-4o",
         messages=[{
             "role": "user",
             "content": [
-                {"type": "text", "text": prompt},
+                {"type": "text",  "text": prompt},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
             ]
         }],
         max_tokens=1500,
         temperature=0
     )
-    return response.choices[0].message.content
+    return resp.choices[0].message.content
 
 def extract_json_block(s: str) -> str:
-    json_regex = re.compile(r'(\[.*?\]|\{.*?\})', re.DOTALL)
-    matches = json_regex.findall(s)
-    if not matches:
-        raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
-    return max(matches, key=len)
+    m = re.findall(r'(\[.*?\]|\{.*?\})', s, re.DOTALL)
+    if not m:
+        raise ValueError("Aucun JSON trouvé dans le modèle.")
+    return max(m, key=len)
 
-# --- Prompt pour GPT-4o Vision ---
-prompt = """
-Tu es un assistant logistique expert. Je vais te fournir un bon de livraison en PDF.
-
-Voici les règles que tu dois absolument suivre :
-
----
-
-🌟 OBJECTIF :
-1. Extraire le **total des quantités** indiqué dans le document (souvent à la ligne `TOTAL ...` ou `Total Unité`).
-2. Reconstituer un tableau avec les colonnes suivantes, en **français + chinois** :
-   - Référence produit / 产品参考
-   - Nombre de cartons / 箱数
-   - Nombre de produits / 产品数量
-   - Vérification / 校验
-3. Vérifier que la **somme des quantités dans le tableau = total indiqué dans le document**.
-4. **TANT QUE LA SOMME NE CORRESPOND PAS**, tu dois :
-   - Recontrôler chaque ligne de produit.
-   - Ne **rien déduire** ou estimer.
-   - **Corriger ou compléter** le tableau.
-   - Recommencer la vérification jusqu’à ce que le total soit **parfaitement exact**.
-
----
-
-📉 DÉTAILS TECHNIQUES :
-- Une ligne avec une référence et une quantité = 1 carton.
-- Plusieurs lignes peuvent partager la même référence : tu dois les **regrouper**.
-- Certaines lignes (notamment vers la fin du document) contiennent **plusieurs produits** avec références différentes : **traite chaque ligne séparément**.
-- Inclue **toutes** les lignes où une référence précède une quantité.
-- Sors la réponse au format JSON suivant :
-[
-  {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108, "Vérification / 校验": ""},
-  ...
-  {"Référence produit / 产品参考": "Total / 合计", "Nombre de cartons / 箱数": XX, "Nombre de produits / 产品数量": 4296, "Vérification / 校验": ""}
-]
-
-📄 Total exact si et seulement si la somme des quantités correspond au total du document.
-"""
-
-# --- 1. Import du fichier (PDF, image ou Excel) ---
+# ─── 1. Upload ───
 uploaded = st.file_uploader(
-    "Importez votre PDF, photo ou fichier Excel",
-    type=["pdf", "png", "jpg", "jpeg", "xls", "xlsx"],
-    key="file_uploader"
+    "Importez votre PDF, votre image ou votre Excel",
+    type=["pdf","png","jpg","jpeg","xls","xlsx"]
 )
 if not uploaded:
     st.stop()
 
 file_bytes = uploaded.getvalue()
 hash_md5 = hashlib.md5(file_bytes).hexdigest()
-st.markdown(f'<div class="card">Fichier : {uploaded.name} — Hash MD5 : {hash_md5}</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="card">Fichier : {uploaded.name} — MD5 : {hash_md5}</div>', unsafe_allow_html=True)
 
-ext = uploaded.name.lower().rsplit('.', 1)[-1]
+# ─── 2. Unifiez en une seule liste d’images ───
+ext = uploaded.name.lower().rsplit(".",1)[-1]
 
-# --- Traitement si c'est un fichier Excel ---
-if ext in ("xls", "xlsx"):
-    df = pd.read_excel(io.BytesIO(file_bytes))
-    st.markdown('<div class="card"><div class="section-title">Aperçu du fichier Excel importé</div></div>', unsafe_allow_html=True)
-    st.dataframe(df, use_container_width=True)
-
-    # Exemple de traitement : vérification d'une colonne Quantité
-    if "Quantité" in df.columns:
-        total_calcule = df["Quantité"].sum()
-        st.markdown(f"🧮 **Total calculé : {total_calcule} unités**")
-    else:
-        st.warning("⚠️ Colonne attendue 'Quantité' non trouvée dans l'Excel.")
-
-    # Bouton pour ré-exporter le résultat
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Traitement")
-    out.seek(0)
-    st.download_button(
-        "📥 Télécharger le résultat au format Excel",
-        data=out,
-        file_name="resultat_traite.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
-
-# --- Sinon, traitement PDF/Image via OCR GPT-4o Vision ---
+if ext in ("xls","xlsx"):
+    # Lire l'Excel en DF brut
+    df_excel = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+    # Convertir en PDF
+    pdf_bytes = excel_to_pdf_bytes(df_excel)
+    images = extract_images_from_pdf(pdf_bytes)
 else:
-    # 2. Extraction des images
     if ext == "pdf":
         images = extract_images_from_pdf(file_bytes)
-    else:
+    else:  # png/jpg/jpeg
         images = [Image.open(io.BytesIO(file_bytes))]
 
-    st.markdown('<div class="card"><div class="section-title">Aperçu du document</div></div>', unsafe_allow_html=True)
-    for i, img in enumerate(images):
-        st.image(img, caption=f"Page {i+1}", use_container_width=True)
+# ─── 3. Aperçu ───
+st.markdown('<div class="card"><div class="section-title">Aperçu du document</div></div>', unsafe_allow_html=True)
+for i, img in enumerate(images):
+    st.image(img, caption=f"Page {i+1}", use_container_width=True)
 
-    # 3. Extraction JSON page par page
-    st.markdown('<div class="card"><div class="section-title">Extraction JSON</div></div>', unsafe_allow_html=True)
-    all_lignes = []
-    for i, img in enumerate(images):
-        st.markdown(f"##### Analyse page {i+1} …")
-        success, output_clean = False, None
-        with st.spinner("Analyse en cours..."):
-            for attempt in range(6):
-                try:
-                    output = extract_json_with_gpt4o(img, prompt)
-                    output_clean = extract_json_block(output)
-                    lignes = json.loads(output_clean)
-                    all_lignes.extend(lignes)
-                    success = True
-                    break
-                except Exception:
-                    continue
-        if not success:
-            st.error(f"❌ Erreur d’extraction page {i+1}")
+# ─── 4. Extraction JSON via GPT-4o Vision ───
+st.markdown('<div class="card"><div class="section-title">Extraction JSON</div></div>', unsafe_allow_html=True)
+all_lignes = []
+for i, img in enumerate(images):
+    st.markdown(f"##### Analyse page {i+1} …")
+    success = False
+    with st.spinner("Analyse en cours…"):
+        for _ in range(6):
+            try:
+                out = extract_json_with_gpt4o(img, prompt)
+                block = extract_json_block(out)
+                lignes = json.loads(block)
+                all_lignes.extend(lignes)
+                success = True
+                break
+            except Exception:
+                continue
+    if not success:
+        st.error(f"❌ Échec extraction page {i+1}")
 
-    # 4. Affichage et vérification
-    st.markdown('<div class="card"><div class="section-title">Résultats</div></div>', unsafe_allow_html=True)
-    df = pd.DataFrame(all_lignes)
-    # Conversion en numérique
-    df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
-    # Colonne de vérification vide si manquante
-    if "Vérification / 校验" not in df.columns:
-        df["Vérification / 校验"] = ""
-    total_calcule = df["Nombre de produits / 产品数量"].sum()
-    st.dataframe(df, use_container_width=True)
-    st.markdown(f"🧶 **Total calculé des produits : {int(total_calcule)} / 产品总数**")
+# ─── 5. Affichage & vérif ───
+st.markdown('<div class="card"><div class="section-title">Résultats</div></div>', unsafe_allow_html=True)
+df = pd.DataFrame(all_lignes)
+df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
+if "Vérification / 校验" not in df.columns:
+    df["Vérification / 校验"] = ""
+total_calcule = df["Nombre de produits / 产品数量"].sum()
+st.dataframe(df, use_container_width=True)
+st.markdown(f"🧶 **Total calculé : {int(total_calcule)}**")
 
-    # 5. Export Excel
-    st.markdown('<div class="card"><div class="section-title">Export Excel</div></div>', unsafe_allow_html=True)
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
-    out.seek(0)
-    st.download_button(
-        "📅 Télécharger les données au format Excel",
-        data=out,
-        file_name="bon_de_livraison_corrige.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
+# ─── 6. Export Excel ───
+st.markdown('<div class="card"><div class="section-title">Export Excel</div></div>', unsafe_allow_html=True)
+out = io.BytesIO()
+with pd.ExcelWriter(out, engine="openpyxl") as writer:
+    df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
+out.seek(0)
+st.download_button(
+    "📅 Télécharger le résultat (Excel)",
+    data=out,
+    file_name="bon_de_livraison_corrige.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
