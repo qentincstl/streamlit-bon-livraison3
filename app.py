@@ -65,39 +65,30 @@ def extract_json_block(s: str) -> str:
 
 # PROMPT FINAL
 prompt = """
-Tu es un assistant logistique expert. Tu vas recevoir un bon de livraison en PDF ou image.
+Tu es un assistant logistique expert. Tu vas recevoir un bon de livraison (PDF ou image).
 
 ---
 
-🌟 OBJECTIF :
-1. Extraire le **total des quantités** indiqué dans le document (généralement à la ligne `TOTAL`, `TOTAL UNITÉ`, etc. en bas de page).
-2. Reconstituer un tableau clair et structuré avec les colonnes suivantes (en français + chinois) :
+OBJECTIF :
+1. Extrait le **total des quantités** indiqué en bas du document (ex. `TOTAL`, `TOTAL UNITÉ`, ou équivalent).
+2. Reconstitue un tableau clair (français + chinois), AVEC CES COLONNES :
    - Référence interne / 内部编号
-   - Référence produit / 产品参考 (EAN, SKU, ou tout autre identifiant produit)
+   - Référence produit / 产品参考
    - Nombre de cartons / 箱数
    - Nombre de produits / 产品数量
    - Vérification / 校验
 
-3. Tu dois **vérifier en interne** que la **somme des produits** (colonne “Nombre de produits”) **correspond exactement** au total indiqué sur le document.
-   - ⚠️ **Ne montre pas les totaux partiels**
-   - ❗ **N'affiche qu'un seul total global à la fin du tableau**
-   - Si la somme ne correspond pas, recommence la lecture jusqu’à obtenir la correspondance exacte.
-   - Ne fais aucune hypothèse ou estimation.
+3. **Regroupe** les lignes ayant la même référence produit.
+4. **Additionne** les quantités pour chaque produit.
+5. À la fin du tableau (UNE SEULE FOIS), ajoute une ligne “Total / 合计” avec la somme des colonnes Nombre de cartons et Nombre de produits.
 
----
+CONTRAINTES :
+- Tu NE DOIS PAS afficher de sous-total ou total au milieu du tableau, seulement en toute dernière ligne.
+- Tu DOIS vérifier que la somme calculée = total inscrit sur le document.
+    - Si ce n’est pas le cas, signale une erreur dans la colonne Vérification (“Écart avec le total du document”).
+- N’ajoute aucun texte, ni commentaire, ni total ailleurs que la dernière ligne.
 
-📋 RÈGLES DE TRAITEMENT :
-- Une ligne contenant une référence et une quantité = 1 carton
-- Plusieurs lignes peuvent avoir la même référence : tu dois les **regrouper**
-- Si une ligne contient plusieurs références produits, sépare-les correctement
-- Inclus **toutes** les lignes valides contenant une référence claire et une quantité associée
-- La colonne “Référence produit” peut contenir un code EAN, SKU, ou autre format d’identification produit
-- La colonne “Référence interne” est un identifiant court utilisé en interne s’il est présent
-- “Nombre de cartons” = nombre de lignes détectées pour cette référence (après regroupement)
-
----
-
-🧾 FORMAT DE SORTIE ATTENDU (en JSON uniquement) :
+FORMAT DE SORTIE OBLIGATOIRE (JSON) :
 [
   {
     "Référence interne / 内部编号": "1V1073DM",
@@ -106,7 +97,7 @@ Tu es un assistant logistique expert. Tu vas recevoir un bon de livraison en PDF
     "Nombre de produits / 产品数量": 324,
     "Vérification / 校验": ""
   },
-  ...
+  ...,
   {
     "Référence interne / 内部编号": "Total / 合计",
     "Référence produit / 产品参考": "",
@@ -115,6 +106,8 @@ Tu es un assistant logistique expert. Tu vas recevoir un bon de livraison en PDF
     "Vérification / 校验": ""
   }
 ]
+"""
+
 
 ---
 
