@@ -9,7 +9,24 @@ import fitz
 from PIL import Image
 import re
 from collections import Counter
-import matplotlib.pyplot as plt
+
+# Vérification de mot de passe simple
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == "3DTRADEperso":
+            st.session_state["password_correct"] = True
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.text_input("🔐 Mot de passe :", type="password", on_change=password_entered, key="password")
+        st.stop()
+    elif not st.session_state["password_correct"]:
+        st.text_input("🔐 Mot de passe :", type="password", on_change=password_entered, key="password")
+        st.error("Mot de passe incorrect.")
+        st.stop()
+
+check_password()
 
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 
@@ -37,19 +54,6 @@ def extract_images_from_pdf(pdf_bytes: bytes):
         img = Image.open(io.BytesIO(pix.tobytes("png")))
         images.append(img)
     return images
-
-def dataframe_to_image(df: pd.DataFrame) -> Image.Image:
-    fig, ax = plt.subplots(figsize=(12, min(0.5 * len(df), 20)))
-    ax.axis('tight')
-    ax.axis('off')
-    table = ax.table(cellText=df.values, colLabels=df.columns, loc='center')
-    table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight')
-    plt.close(fig)
-    buf.seek(0)
-    return Image.open(buf)
 
 def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
     buf = io.BytesIO()
@@ -116,39 +120,21 @@ Voici les règles que tu dois absolument suivre :
 """
 
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Importez un fichier (PDF, image ou Excel)", key="file_uploader")
+uploaded = st.file_uploader("Importez votre PDF ou photo", key="file_uploader")
 if not uploaded:
     st.stop()
-
-file_bytes = uploaded.read()
+file_bytes = uploaded.getvalue()
 hash_md5 = hashlib.md5(file_bytes).hexdigest()
 st.markdown(f'<div class="card">Fichier : {uploaded.name} — Hash MD5 : {hash_md5}</div>', unsafe_allow_html=True)
 
-# Détection et traitement selon l'extension
 ext = uploaded.name.lower().rsplit('.', 1)[-1]
-if ext == "pdf":
-    images = extract_images_from_pdf(file_bytes)
-elif ext in ["png", "jpg", "jpeg"]:
-    images = [Image.open(io.BytesIO(file_bytes))]
-elif ext in ["xlsx", "xls"]:
-    try:
-        df_excel = pd.read_excel(io.BytesIO(file_bytes))
-        img_excel = dataframe_to_image(df_excel)
-        images = [img_excel]
-    except Exception as e:
-        st.error(f"Erreur lors du traitement du fichier Excel : {e}")
-        st.stop()
-else:
-    st.error("❌ Format non supporté. Veuillez importer un PDF, une image ou un fichier Excel.")
-    st.stop()
+images = extract_images_from_pdf(file_bytes) if ext == 'pdf' else [Image.open(io.BytesIO(file_bytes))]
 
-# Affichage des pages/images
 st.markdown('<div class="card"><div class="section-title">2. Aperçu du document</div>', unsafe_allow_html=True)
 for i, img in enumerate(images):
     st.image(img, caption=f"Page {i+1}", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Extraction JSON
 st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
 all_lignes = []
 for i, img in enumerate(images):
@@ -169,9 +155,9 @@ for i, img in enumerate(images):
         st.error(f"❌ Erreur d’extraction page {i+1}")
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Affichage des résultats et vérification
 st.markdown('<div class="card"><div class="section-title">4. Résultats</div>', unsafe_allow_html=True)
 df = pd.DataFrame(all_lignes)
+
 try:
     df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
     valeurs = df["Nombre de produits / 产品数量"].astype(str)
@@ -179,14 +165,15 @@ try:
 except Exception as e:
     st.warning(f"Erreur pendant la conversion ou la vérification des quantités : {e}")
 
+# Ajouter une colonne de vérification vide
 if "Vérification / 校验" not in df.columns:
     df["Vérification / 校验"] = ""
+
 total_calcule = df["Nombre de produits / 产品数量"].sum()
 st.dataframe(df, use_container_width=True)
 st.markdown(f"🧶 **Total calculé des produits : {int(total_calcule)} / 产品总数**")
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Export Excel
 st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
