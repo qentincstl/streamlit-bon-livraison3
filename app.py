@@ -108,12 +108,6 @@ FORMAT DE SORTIE OBLIGATOIRE (JSON) :
 ]
 """
 
-
----
-
-🛑 Ne fournis **aucun texte ou commentaire autour** du JSON. La réponse doit être **strictement** le tableau JSON demandé.
-"""
-
 # ---- UI ----
 
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
