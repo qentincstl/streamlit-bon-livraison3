@@ -9,7 +9,6 @@ import fitz
 from PIL import Image
 import re
 
-# Config
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
@@ -19,7 +18,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<h1 class="section-title">Fiche de réception (OCR multi-pages & Excel via GPT-4o)</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="section-title">Fiche de réception (OCR & Excel propres)</h1>', unsafe_allow_html=True)
 
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
@@ -36,17 +35,21 @@ def extract_images_from_pdf(pdf_bytes: bytes):
         images.append(img)
     return images
 
-def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode()
+def extract_json_with_gpt4o(images, prompt: str):
+    """Envoie toutes les pages à GPT en une fois (si possible) pour éviter les totaux multiples"""
+    bufs = []
+    for img in images:
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        bufs.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[{
             "role": "user",
             "content": [
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+                *bufs
             ]
         }],
         max_tokens=1500,
@@ -61,7 +64,7 @@ def extract_json_block(s: str) -> str:
         raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
     return max(matches, key=len)
 
-# PROMPT FINAL GPT-4o
+# PROMPT FINAL
 prompt = """
 Tu es un assistant logistique expert. Tu vas recevoir un bon de livraison (PDF ou image).
 
@@ -118,20 +121,14 @@ ext = uploaded.name.lower().rsplit('.', 1)[-1]
 if ext == "xlsx":
     try:
         df = pd.read_excel(io.BytesIO(file_bytes))
-        # Recherche automatique des colonnes clés
-        colonne_ref_interne = [col for col in df.columns if "interne" in col.lower() or "编号" in col]
-        colonne_ref_produit = [col for col in df.columns if "ean" in col.lower() or "produit" in col.lower() or "参考" in col]
-        colonne_cartons = [col for col in df.columns if "carton" in col.lower() or "箱" in col]
-        colonne_qte = [col for col in df.columns if "quant" in col.lower() or "数量" in col]
-
+        # >>>> MAPPING À LA MAIN (adapte ici selon ton Excel, tu peux rendre les noms flexibles si besoin) <<<<
         df_std = pd.DataFrame()
-        df_std["Référence interne / 内部编号"] = df[colonne_ref_interne[0]] if colonne_ref_interne else ""
-        df_std["Référence produit / 产品参考"] = df[colonne_ref_produit[0]] if colonne_ref_produit else ""
-        df_std["Nombre de cartons / 箱数"] = df[colonne_cartons[0]] if colonne_cartons else 1
-        df_std["Nombre de produits / 产品数量"] = df[colonne_qte[0]] if colonne_qte else 0
+        df_std["Référence interne / 内部编号"] = df["Référence interne"] if "Référence interne" in df.columns else ""
+        df_std["Référence produit / 产品参考"] = df["Référence produit"] if "Référence produit" in df.columns else df["EAN"] if "EAN" in df.columns else ""
+        df_std["Nombre de cartons / 箱数"] = df["Nombre de cartons"] if "Nombre de cartons" in df.columns else 1
+        df_std["Nombre de produits / 产品数量"] = df["Nombre de produits"] if "Nombre de produits" in df.columns else df["Quantité"] if "Quantité" in df.columns else 0
         df_std["Vérification / 校验"] = ""
 
-        # Groupement
         group = df_std.groupby(
             ["Référence interne / 内部编号", "Référence produit / 产品参考"],
             as_index=False
@@ -141,7 +138,7 @@ if ext == "xlsx":
         })
         group["Vérification / 校验"] = ""
 
-        # Ajout du total à la fin
+        # Ajoute un SEUL total global à la fin
         total_cartons = group["Nombre de cartons / 箱数"].sum()
         total_qte = group["Nombre de produits / 产品数量"].sum()
         total_row = {
@@ -173,7 +170,7 @@ if ext == "xlsx":
         st.error(f"Erreur lors de la lecture ou transformation Excel : {e}")
         st.stop()
 else:
-    # PDF ou image : OCR + GPT
+    # PDF/image : TOUTES pages envoyées ensemble pour UN SEUL total final
     images = extract_images_from_pdf(file_bytes) if ext == 'pdf' else [Image.open(io.BytesIO(file_bytes))]
 
     st.markdown('<div class="card"><div class="section-title">2. Aperçu du document</div>', unsafe_allow_html=True)
@@ -182,27 +179,23 @@ else:
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
-    all_lignes = []
-    for i, img in enumerate(images):
-        st.markdown(f"##### Analyse page {i+1} …")
-        success, output_clean = False, None
-        with st.spinner("Analyse en cours..."):
-            for attempt in range(6):
-                try:
-                    output = extract_json_with_gpt4o(img, prompt)
-                    output_clean = extract_json_block(output)
-                    lignes = json.loads(output_clean)
-                    all_lignes.extend(lignes)
-                    success = True
-                    break
-                except Exception:
-                    continue
-        if not success:
-            st.error(f"❌ Erreur d’extraction page {i+1}")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.spinner("Analyse en cours..."):
+        try:
+            output = extract_json_with_gpt4o(images, prompt)
+            output_clean = extract_json_block(output)
+            lignes = json.loads(output_clean)
+            # Supprime tous les totaux qui ne seraient pas en dernière ligne (par précaution)
+            if len(lignes) > 2:
+                last_idx = max(i for i, x in enumerate(lignes) if (
+                    "Total" in x.get("Référence interne / 内部编号", "") or "合计" in x.get("Référence interne / 内部编号", ""))
+                )
+                lignes = lignes[:last_idx] + [lignes[last_idx]]
+            df = pd.DataFrame(lignes)
+        except Exception as e:
+            st.error(f"❌ Erreur d'extraction ou de format JSON : {e}")
+            st.stop()
 
     st.markdown('<div class="card"><div class="section-title">4. Résultats</div>', unsafe_allow_html=True)
-    df = pd.DataFrame(all_lignes)
     st.dataframe(df, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
