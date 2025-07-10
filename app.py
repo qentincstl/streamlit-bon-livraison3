@@ -15,10 +15,11 @@ st.markdown("""
   .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
   .card { background:#fff; padding:1rem; border-radius:0.5rem;
           box-shadow:0 2px 4px rgba(0,0,0,0.07); margin-bottom:1.5rem; }
+  .jsonout { white-space:pre-wrap; font-family:monospace; background:#f8f8f8; padding:1rem; border-radius:0.5rem;}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<h1 class="section-title">Fiche de réception (OCR & Excel propres)</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="section-title">Fiche de réception (OCR multi-pages & Excel “intelligent”)</h1>', unsafe_allow_html=True)
 
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
@@ -36,7 +37,6 @@ def extract_images_from_pdf(pdf_bytes: bytes):
     return images
 
 def extract_json_with_gpt4o(images, prompt: str):
-    """Envoie toutes les pages à GPT en une fois (si possible) pour éviter les totaux multiples"""
     bufs = []
     for img in images:
         buf = io.BytesIO()
@@ -52,7 +52,7 @@ def extract_json_with_gpt4o(images, prompt: str):
                 *bufs
             ]
         }],
-        max_tokens=1500,
+        max_tokens=2000,
         temperature=0
     )
     return response.choices[0].message.content
@@ -64,9 +64,102 @@ def extract_json_block(s: str) -> str:
         raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
     return max(matches, key=len)
 
-# PROMPT FINAL
+def excel_bdl_autodetect(df):
+    """Extraction intelligente d'un bon de livraison Excel non structuré : trouve infos globales + table produits + fusion doublons + total"""
+    bon_livraison, commande, client, date_str = None, None, None, None
+    # Recherche infos
+    bon_livraison_num = df[df.eq("Bon de livraison N° :").any(1)]
+    if not bon_livraison_num.empty:
+        idx = bon_livraison_num.index[0]
+        bon_livraison = df.iat[idx, bon_livraison_num.columns[0] + 1]
+
+    commande_num = df[df.eq("Commande").any(1)]
+    if not commande_num.empty:
+        idx = commande_num.index[0]
+        commande = df.iat[idx, commande_num.columns[0] + 1]
+
+    client_info = df[df.eq("Client :").any(1)]
+    if not client_info.empty:
+        idx = client_info.index[0]
+        client = df.iat[idx, client_info.columns[0] + 1]
+
+    date_info = df[df.eq("Date :").any(1)]
+    if not date_info.empty:
+        idx = date_info.index[0]
+        date_value = df.iat[idx, date_info.columns[0] + 1]
+        date_str = pd.to_datetime(date_value).strftime("%Y-%m-%d") if pd.notna(date_value) else None
+
+    # Repérage table produits
+    header_row = df[df.eq("Intitulé").any(1)].index
+    articles, table = [], pd.DataFrame()
+    if len(header_row) > 0:
+        start = header_row[0] + 1
+        total_row = df[df.eq("Total").any(1)].index
+        end = total_row[0] if len(total_row) > 0 else df.shape[0]
+        produit_rows = df.iloc[start:end].reset_index(drop=True)
+        produits_list = []
+        for _, row in produit_rows.iterrows():
+            ref = row[0]
+            designation = row[3]
+            quantite = row[4]
+            if pd.isna(ref) or pd.isna(designation) or pd.isna(quantite):
+                continue
+            produits_list.append({"ref": ref, "designation": designation, "quantite": float(quantite)})
+
+        # Fusion des doublons de produits par désignation
+        fusionnes = {}
+        for produit in produits_list:
+            nom = str(produit["designation"]).strip()
+            qt = float(produit["quantite"])
+            if nom in fusionnes:
+                fusionnes[nom]["quantite"] += qt
+            else:
+                fusionnes[nom] = produit.copy()
+        articles = list(fusionnes.values())
+
+        # Table formatée pour affichage et export
+        table = pd.DataFrame([
+            {
+                "Référence interne / 内部编号": art["ref"],
+                "Référence produit / 产品参考": "",  # À compléter si tu as l'EAN dans une autre colonne
+                "Nombre de cartons / 箱数": 1,  # Par défaut 1 ligne = 1 carton (à adapter)
+                "Nombre de produits / 产品数量": art["quantite"],
+                "Désignation": art["designation"]
+            } for art in articles
+        ])
+
+        total_calcule = sum(art["quantite"] for art in articles)
+        total_lu = None
+        if len(total_row) > 0:
+            total_lu = produit_rows.iloc[total_row[0] - start, 4]
+        total_final = total_calcule if total_lu is None or total_calcule != total_lu else total_lu
+
+        # Ajout du total unique à la fin de la table
+        total_row_out = {
+            "Référence interne / 内部编号": "Total / 合计",
+            "Référence produit / 产品参考": "",
+            "Nombre de cartons / 箱数": "",
+            "Nombre de produits / 产品数量": total_final,
+            "Désignation": ""
+        }
+        table = pd.concat([table, pd.DataFrame([total_row_out])], ignore_index=True)
+
+        # Complétion du JSON final
+        resultat = {
+            "bon_de_livraison": bon_livraison,
+            "commande": commande,
+            "client": client,
+            "date": date_str,
+            "articles": articles,
+            "total": total_final
+        }
+    else:
+        resultat = {}
+        table = df
+    return resultat, table
+
 prompt = """
-Tu es un assistant logistique expert. Tu vas recevoir un bon de livraison (PDF ou image).
+Tu es un assistant logistique expert. Tu vas recevoir un bon de livraison (PDF, image ou Excel).
 
 OBJECTIF :
 1. Extrait le total des quantités indiqué en bas du document (ex. TOTAL, TOTAL UNITÉ, ou équivalent).
@@ -120,46 +213,30 @@ ext = uploaded.name.lower().rsplit('.', 1)[-1]
 
 if ext == "xlsx":
     try:
-        df = pd.read_excel(io.BytesIO(file_bytes))
-        # >>>> MAPPING À LA MAIN (adapte ici selon ton Excel, tu peux rendre les noms flexibles si besoin) <<<<
-        df_std = pd.DataFrame()
-        df_std["Référence interne / 内部编号"] = df["Référence interne"] if "Référence interne" in df.columns else ""
-        df_std["Référence produit / 产品参考"] = df["Référence produit"] if "Référence produit" in df.columns else df["EAN"] if "EAN" in df.columns else ""
-        df_std["Nombre de cartons / 箱数"] = df["Nombre de cartons"] if "Nombre de cartons" in df.columns else 1
-        df_std["Nombre de produits / 产品数量"] = df["Nombre de produits"] if "Nombre de produits" in df.columns else df["Quantité"] if "Quantité" in df.columns else 0
-        df_std["Vérification / 校验"] = ""
+        # Lecture brute (header=None pour laisser la détection auto)
+        df_raw = pd.read_excel(io.BytesIO(file_bytes), header=None)
+        # Extraction “auto-détection” : infos principales + table produits + JSON
+        json_bdl, table = excel_bdl_autodetect(df_raw)
 
-        group = df_std.groupby(
-            ["Référence interne / 内部编号", "Référence produit / 产品参考"],
-            as_index=False
-        ).agg({
-            "Nombre de cartons / 箱数": "sum",
-            "Nombre de produits / 产品数量": "sum"
-        })
-        group["Vérification / 校验"] = ""
-
-        # Ajoute un SEUL total global à la fin
-        total_cartons = group["Nombre de cartons / 箱数"].sum()
-        total_qte = group["Nombre de produits / 产品数量"].sum()
-        total_row = {
-            "Référence interne / 内部编号": "Total / 合计",
-            "Référence produit / 产品参考": "",
-            "Nombre de cartons / 箱数": total_cartons,
-            "Nombre de produits / 产品数量": total_qte,
-            "Vérification / 校验": ""
-        }
-        group = pd.concat([group, pd.DataFrame([total_row])], ignore_index=True)
-
-        st.markdown('<div class="card"><div class="section-title">Aperçu Excel (format standard)</div>', unsafe_allow_html=True)
-        st.dataframe(group, use_container_width=True)
+        st.markdown('<div class="card"><div class="section-title">2. Résumé et JSON</div>', unsafe_allow_html=True)
+        st.markdown("#### Informations globales")
+        infos = {k: v for k, v in json_bdl.items() if k in ["bon_de_livraison", "commande", "client", "date"]}
+        st.write(infos)
+        st.markdown("#### Sortie JSON (articles + total)")
+        st.markdown(f"<div class='jsonout'>{json.dumps(json_bdl, ensure_ascii=False, indent=2)}</div>", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+        st.markdown('<div class="card"><div class="section-title">3. Tableau consolidé</div>', unsafe_allow_html=True)
+        st.dataframe(table, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Export Excel
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
-            group.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
+            table.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
         out.seek(0)
         st.download_button(
-            "📅 Télécharger au format Excel",
+            "📅 Télécharger le tableau au format Excel",
             data=out,
             file_name="bon_de_livraison_corrige.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -170,9 +247,8 @@ if ext == "xlsx":
         st.error(f"Erreur lors de la lecture ou transformation Excel : {e}")
         st.stop()
 else:
-    # PDF/image : TOUTES pages envoyées ensemble pour UN SEUL total final
+    # PDF/image : toutes pages envoyées d'un coup à GPT-4o pour 1 SEUL total final
     images = extract_images_from_pdf(file_bytes) if ext == 'pdf' else [Image.open(io.BytesIO(file_bytes))]
-
     st.markdown('<div class="card"><div class="section-title">2. Aperçu du document</div>', unsafe_allow_html=True)
     for i, img in enumerate(images):
         st.image(img, caption=f"Page {i+1}", use_container_width=True)
@@ -184,7 +260,7 @@ else:
             output = extract_json_with_gpt4o(images, prompt)
             output_clean = extract_json_block(output)
             lignes = json.loads(output_clean)
-            # Supprime tous les totaux qui ne seraient pas en dernière ligne (par précaution)
+            # Supprime les totaux non finaux s'il y en avait plusieurs
             if len(lignes) > 2:
                 last_idx = max(i for i, x in enumerate(lignes) if (
                     "Total" in x.get("Référence interne / 内部编号", "") or "合计" in x.get("Référence interne / 内部编号", ""))
