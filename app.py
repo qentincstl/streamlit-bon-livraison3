@@ -9,19 +9,7 @@ import json
 import re
 import hashlib
 
-# — 1) Protection par mot de passe —
-def check_password():
-    def on_enter():
-        st.session_state["ok"] = (st.session_state.get("pwd") == "3DTRADEperso")
-    if not st.session_state.get("ok"):
-        st.text_input("🔐 Mot de passe :", type="password", key="pwd", on_change=on_enter)
-        st.stop()
-    if not st.session_state["ok"]:
-        st.text_input("🔐 Mot de passe :", type="password", key="pwd", on_change=on_enter)
-        st.error("Mot de passe incorrect.")
-        st.stop()
 
-check_password()
 
 # — 2) Configuration de la page & style —
 st.set_page_config(page_title="Extraction complète de la table", layout="wide", page_icon="📋")
