@@ -1,3 +1,4 @@
+# --- Imports
 import streamlit as st
 import pandas as pd
 import openai
@@ -8,58 +9,31 @@ import hashlib
 import fitz
 from PIL import Image
 import re
-from collections import Counter
 
-st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
+# --- Page config
+st.set_page_config(page_title="Fiche de réception GPT", layout="wide", page_icon="📦")
 
-# CSS
-st.markdown("""
-<style>
-  .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
-  .card { background:#fff; padding:1rem; border-radius:0.5rem;
-          box-shadow:0 2px 4px rgba(0,0,0,0.07); margin-bottom:1.5rem; }
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown('<h1 class="section-title">Fiche de réception (OCR multi-supports via GPT-4o)</h1>', unsafe_allow_html=True)
-
-# Clé API
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
-if not OPENAI_API_KEY:
-    st.error("🚩 Ajoutez `OPENAI_API_KEY` dans les Secrets.")
+# --- Clé API
+openai.api_key = st.secrets.get("OPENAI_API_KEY", "")
+if not openai.api_key:
+    st.error("Ajoute ta clé OPENAI_API_KEY dans les secrets de Streamlit.")
     st.stop()
-openai.api_key = OPENAI_API_KEY
 
-# PROMPT
+# --- PROMPT
 prompt = """
-Tu es un assistant logistique expert. Je vais te fournir un bon de livraison ou un tableau (Excel) contenant des données brutes.
-
-Voici les règles que tu dois absolument suivre :
+Tu es un assistant logistique expert. Je vais te fournir un bon de livraison ou un tableau brut (Excel).
 
 ---
 
 🌟 OBJECTIF :
-1. Extraire le **total des quantités** indiqué dans le document (souvent à la ligne `TOTAL ...` ou `Total Unité`).
-2. Reconstituer un tableau avec les colonnes suivantes, en **français + chinois** :
+1. Extraire le **total des quantités**.
+2. Reconstituer un tableau avec :
    - Référence produit / 产品参考
    - Nombre de cartons / 箱数
    - Nombre de produits / 产品数量
    - Vérification / 校验
-3. Vérifier que la **somme des quantités dans le tableau = total indiqué dans le document**.
-4. **TANT QUE LA SOMME NE CORRESPOND PAS**, tu dois :
-   - Recontrôler chaque ligne de produit.
-   - Ne **rien déduire** ou estimer.
-   - **Corriger ou compléter** le tableau.
-   - Recommencer la vérification jusqu’à ce que le total soit **parfaitement exact**.
-
----
-
-📉 DÉTAILS TECHNIQUES :
-- Une ligne avec une référence et une quantité = 1 carton.
-- Plusieurs lignes peuvent partager la même référence : tu dois les **regrouper**.
-- Certaines lignes (notamment vers la fin du document) contiennent **plusieurs produits** avec références différentes : **traite chaque ligne séparément**.
-- Inclue **toutes** les lignes où une référence précède une quantité.
-- Sors la réponse au format JSON suivant :
+3. Vérifier que la somme des quantités = total annoncé.
+4. Sors uniquement ce JSON :
 [
   {"Référence produit / 产品参考": "...", "Nombre de cartons / 箱数": 1, "Nombre de produits / 产品数量": 108, "Vérification / 校验": ""},
   ...
@@ -67,8 +41,8 @@ Voici les règles que tu dois absolument suivre :
 ]
 """
 
-# Fonctions
-def extract_images_from_pdf(pdf_bytes: bytes):
+# --- Fonctions
+def extract_images_from_pdf(pdf_bytes):
     images = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page in doc:
@@ -77,7 +51,7 @@ def extract_images_from_pdf(pdf_bytes: bytes):
         images.append(img)
     return images
 
-def extract_json_with_gpt4o_from_image(img: Image.Image, prompt: str) -> str:
+def extract_json_from_image(img, prompt):
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
@@ -95,98 +69,96 @@ def extract_json_with_gpt4o_from_image(img: Image.Image, prompt: str) -> str:
     )
     return response.choices[0].message.content
 
-def extract_json_with_gpt4o_from_text(text: str, prompt: str) -> str:
+def extract_json_from_text(text, prompt):
     response = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[
-            {"role": "user", "content": prompt + "\n\nVoici le contenu :\n" + text}
-        ],
-        max_tokens=1500,
-        temperature=0
+        messages=[{"role": "user", "content": prompt + "\n\n" + text}]
     )
     return response.choices[0].message.content
 
-def extract_json_block(s: str) -> str:
-    json_regex = re.compile(r'(\[.*?\]|\{.*?\})', re.DOTALL)
+def extract_json_block(s):
+    json_regex = re.compile(r'(\[.*?\])', re.DOTALL)
     matches = json_regex.findall(s)
     if not matches:
         raise ValueError("Aucun JSON trouvé.")
     return max(matches, key=len)
 
-# UI
-st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Importez votre PDF, image ou Excel", type=["pdf", "png", "jpg", "jpeg", "xls", "xlsx"])
+def run_gpt_analysis(source, from_text=False):
+    try:
+        if from_text:
+            raw = extract_json_from_text(source, prompt)
+        else:
+            raw = extract_json_from_image(source, prompt)
+        clean = extract_json_block(raw)
+        data = json.loads(clean)
+        return data
+    except Exception as e:
+        st.error(f"Erreur GPT : {e}")
+        return []
+
+# --- Interface utilisateur
+st.title("📦 Fiche de réception - GPT Vision & Excel")
+uploaded = st.file_uploader("Dépose ton fichier PDF, image ou Excel :", type=["pdf", "png", "jpg", "jpeg", "xls", "xlsx"])
+
 if not uploaded:
     st.stop()
 
-file_bytes = uploaded.getvalue()
-ext = uploaded.name.lower().split('.')[-1]
+file_bytes = uploaded.read()
+ext = uploaded.name.split(".")[-1].lower()
 hash_md5 = hashlib.md5(file_bytes).hexdigest()
-st.markdown(f'<div class="card">Fichier : {uploaded.name} — Hash MD5 : {hash_md5}</div>', unsafe_allow_html=True)
+st.caption(f"Fichier : {uploaded.name} — Hash : {hash_md5}")
 
-# Préparation des images ou texte
-json_data = []
-if ext in ["pdf", "png", "jpg", "jpeg"]:
-    images = extract_images_from_pdf(file_bytes) if ext == "pdf" else [Image.open(io.BytesIO(file_bytes))]
+# --- GPT Analysis
+rerun = st.button("🔁 Refaire l'analyse GPT")
 
-    st.markdown('<div class="card"><div class="section-title">2. Aperçu du document</div>', unsafe_allow_html=True)
-    for i, img in enumerate(images):
-        st.image(img, caption=f"Page {i+1}", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+if "df_final" not in st.session_state or rerun:
+    json_data = []
 
-    for i, img in enumerate(images):
-        for attempt in range(2):
-            try:
-                raw = extract_json_with_gpt4o_from_image(img, prompt)
-                clean = extract_json_block(raw)
-                lignes = json.loads(clean)
-                json_data.extend(lignes)
-                break
-            except Exception:
-                continue
+    if ext in ["pdf", "png", "jpg", "jpeg"]:
+        images = extract_images_from_pdf(file_bytes) if ext == "pdf" else [Image.open(io.BytesIO(file_bytes))]
+        for img in images:
+            json_data += run_gpt_analysis(img, from_text=False)
 
-elif ext in ["xls", "xlsx"]:
-    df_excel = pd.read_excel(io.BytesIO(file_bytes))
-    st.markdown('<div class="card"><div class="section-title">2. Aperçu du fichier Excel</div>', unsafe_allow_html=True)
-    st.dataframe(df_excel, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    elif ext in ["xls", "xlsx"]:
+        df_excel = pd.read_excel(io.BytesIO(file_bytes))
+        text_content = df_excel.to_csv(index=False, sep="\t")
+        json_data += run_gpt_analysis(text_content, from_text=True)
 
-    text_table = df_excel.to_csv(index=False, sep="\t")
-    for attempt in range(2):
-        try:
-            raw = extract_json_with_gpt4o_from_text(text_table, prompt)
-            clean = extract_json_block(raw)
-            lignes = json.loads(clean)
-            json_data.extend(lignes)
-            break
-        except Exception:
-            continue
+    if json_data:
+        df = pd.DataFrame(json_data)
+        df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
+        df["Nombre de cartons / 箱数"] = pd.to_numeric(df["Nombre de cartons / 箱数"], errors="coerce")
+        df["Vérification / 校验"] = df.get("Vérification / 校验", "")
+        st.session_state.df_final = df
+    else:
+        st.stop()
 
-# Résultats
-if json_data:
-    df = pd.DataFrame(json_data)
-    df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
-    total_calcule = df["Nombre de produits / 产品数量"].sum()
+# --- Résultats
+df = st.session_state.df_final
+total_calcule = df["Nombre de produits / 产品数量"].sum()
+try:
+    total_annonce = df[df["Référence produit / 产品参考"].str.contains("Total", case=False, na=False)]["Nombre de produits / 产品数量"].max()
+except:
+    total_annonce = None
 
-    st.markdown('<div class="card"><div class="section-title">3. Résultats extraits</div>', unsafe_allow_html=True)
-    df = df[["Référence produit / 产品参考", "Nombre de cartons / 箱数", "Nombre de produits / 产品数量", "Vérification / 校验"]]
-    st.dataframe(df, use_container_width=True)
-    st.markdown(f"🧮 **Total calculé : {int(total_calcule)} produits / 产品总数**")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # Export Excel
-    st.markdown('<div class="card"><div class="section-title">4. Export Excel</div>', unsafe_allow_html=True)
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
-    out.seek(0)
-    st.download_button(
-        "📦 Télécharger le fichier Excel nettoyé",
-        data=out,
-        file_name="bon_de_livraison_corrige.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+# --- Alertes
+if total_annonce and total_annonce != total_calcule:
+    st.error(f"⚠️ Incohérence entre total annoncé ({int(total_annonce)}) et total calculé ({int(total_calcule)})")
 else:
-    st.error("❌ Échec de l'extraction. Vérifiez que le document est lisible.")
+    st.success(f"✅ Total cohérent : {int(total_calcule)} produits")
+
+# --- Tableau
+st.subheader("📋 Résultat structuré")
+df_display = df[["Référence produit / 产品参考", "Nombre de cartons / 箱数", "Nombre de produits / 产品数量", "Vérification / 校验"]]
+st.dataframe(df_display, use_container_width=True)
+
+# --- Export
+st.subheader("📤 Exporter les résultats")
+excel_buffer = io.BytesIO()
+csv_buffer = io.StringIO()
+with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+    df_display.to_excel(writer, index=False, sheet_name="BON_LIVRAISON")
+df_display.to_csv(csv_buffer, index=False)
+
+st.download_button("⬇️ Télécharger Excel", data=excel_buffer.getvalue(), file_name="bon_de_livraison_corrige.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+st.download_button("⬇️ Télécharger CSV", data=csv_buffer.getvalue(), file_name="bon_de_livraison_corrige.csv", mime="text/csv")
