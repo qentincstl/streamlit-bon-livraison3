@@ -9,7 +9,7 @@ import json
 import re
 import hashlib
 
-# — Vérification mot de passe —
+# — 1) Password —
 def check_password():
     def on_enter():
         st.session_state["ok"] = (st.session_state["pwd"] == "3DTRADEperso")
@@ -20,172 +20,184 @@ def check_password():
         st.text_input("🔐 Mot de passe :", type="password", key="pwd", on_change=on_enter)
         st.error("Mot de passe incorrect.")
         st.stop()
-
 check_password()
 
-# — Page config & style —
-st.set_page_config(page_title="Extraction colonnes & vérif", layout="wide", page_icon="📋")
+# — 2) Config page & style —
+st.set_page_config(page_title="Extraction + Harmonisation", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
-  .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
-  .card { background:#fff; padding:1rem; border-radius:0.5rem;
-          box-shadow:0 2px 4px rgba(0,0,0,0.07); margin-bottom:1.5rem; }
+.section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
+.card { background:#fff; padding:1rem; border-radius:0.5rem;
+        box-shadow:0 2px 4px rgba(0,0,0,0.07); margin-bottom:1.5rem; }
 </style>
 """, unsafe_allow_html=True)
-st.markdown('<h1 class="section-title">Extraction Colonnes et Vérification</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="section-title">Extraction multi-prompts & harmonisation</h1>', unsafe_allow_html=True)
 
-# — Clé API OpenAI —
+# — 3) API key —
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
-    st.error("🚩 Ajoutez `OPENAI_API_KEY` dans vos Secrets.")
+    st.error("🚩 Ajoutez OPENAI_API_KEY dans vos Secrets.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# — Convertir PDF → images —
+# — 4) PDF → images —
 def extract_images_from_pdf(pdf_bytes: bytes):
     imgs = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    for page in doc:
-        pix = page.get_pixmap(dpi=300)
+    for p in doc:
+        pix = p.get_pixmap(dpi=300)
         imgs.append(Image.open(io.BytesIO(pix.tobytes("png"))))
     return imgs
 
-# — Appel générique renvoyant le JSON complet —
-def call_gpt_for_json(img: Image.Image, prompt: str) -> dict:
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode()
+# — 5) Appel GPT renvoyant un dict JSON —
+def call_gpt_json(prompt: str, img: Image.Image=None) -> dict:
+    """Si img fourni, on inclut l'image, sinon on envoie juste le prompt."""
+    messages = [{"role":"user","content":prompt}]
+    if img:
+        buf=io.BytesIO(); img.save(buf,format="PNG")
+        b64=base64.b64encode(buf.getvalue()).decode()
+        messages[0]["content"] = [
+            {"type":"text","text":prompt},
+            {"type":"image_url","image_url":{"url":f"data:image/png;base64,{b64}"}} 
+        ]
     resp = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-            ]
-        }],
+        messages=messages,
         temperature=0,
-        max_tokens=600
+        max_tokens=800
     )
     out = resp.choices[0].message.content
-    m = re.search(r'(\{.*?\})', out, re.DOTALL)
+    m = re.search(r'(\{[\s\S]*\})', out)
     if not m:
-        raise ValueError("Aucun JSON trouvé dans la réponse.")
-    return json.loads(m.group(0))
+        raise ValueError("Aucun JSON renvoyé.")
+    return json.loads(m.group(1))
 
-# — Prompts pour chaque extraction —
+# — 6) Prompts —
 COLUMN_PROMPTS = {
     "Référence produit / 产品参考": """
-Tu es un assistant logistique expert. Je te fournis une image ou une page de PDF d'un bon de livraison.
-Extrait toutes les **références produit** (alphanumériques) et renvoie **uniquement** ce JSON :
-{"values": ["REF001", "REF002", ...]}
-    """.strip(),
-    "Code EAN / 条形码": """
-Tu es un assistant logistique expert. Je te fournis une image ou une page de PDF d'un bon de livraison.
-Extrait tous les **codes EAN** (13 chiffres) ou numéros de code-barres,
-parfois indiqués sous "Code EAN", "EAN", "Code-barres", etc.
-Renvoie **uniquement** ce JSON :
+Tu es un assistant logistique expert. Je te fournis une image/page PDF d'un bon de livraison.
+Extrait toutes les **références produit** (alphanumériques) et renvoie **uniquement** :
+{"values": ["REF001","REF002",...]}
+""".strip(),
+    "Code-barres / 条形码": """
+Tu es un assistant logistique expert. Je te fournis une image/page PDF d'un bon de livraison.
+Extrait tous les **codes EAN** (13 chiffres) ou codes-barres,
+même lorsqu'ils sont sous l'intitulé "Code EAN", "EAN", "Code-barres", etc.
+Renvoie **uniquement** :
 {"values": ["1234567890123", ...]}
-    """.strip(),
+""".strip(),
     "Nombre de cartons / 箱数": """
-Tu es un assistant logistique expert. Je te fournis une image ou une page de PDF d'un bon de livraison.
-Extrait tous les **nombres de cartons** (entiers) pour chaque ligne de produit
-et renvoie **uniquement** ce JSON :
-{"values": [1, 2, ...]}
-    """.strip(),
+Tu es un assistant logistique expert. Je te fournis une image/page PDF d'un bon de livraison.
+Extrait tous les **nombre de cartons** (entiers) pour chaque ligne
+et renvoie **uniquement** :
+{"values": [1,2,...]}
+""".strip(),
     "Nombre de produits / 产品数量": """
-Tu es un assistant logistique expert. Je te fournis une image ou une page de PDF d'un bon de livraison.
-Extrait tous les **nombres de produits** (entiers) pour chaque ligne de produit
-et renvoie **uniquement** ce JSON :
-{"values": [108, 50, ...]}
-    """.strip()
+Tu es un assistant logistique expert. Je te fournis une image/page PDF d'un bon de livraison.
+Extrait tous les **nombre de produits** (entiers) pour chaque ligne
+et renvoie **uniquement** :
+{"values": [108,50,...]}
+""".strip()
 }
-
-# — Prompt pour extraire le total à vérifier —
 TOTAL_PROMPT = """
-Tu es un assistant logistique expert. Je te fournis une image ou une page de PDF d'un bon de livraison.
-Extrait la **valeur du total des produits** indiquée dans le document,
-souvent sous "Total", "TOTAL", "合计", etc.
-Renvoie **uniquement** ce JSON :
+Tu es un assistant logistique expert. Je te fournis une image/page PDF d'un bon de livraison.
+Extrait la **valeur du total** des produits (souvent sous 'Total', 'TOTAL', '合计', etc.)
+et renvoie **uniquement** :
 {"total": 4296}
 """.strip()
+HARMONISE_PROMPT_TEMPLATE = """
+Tu es un assistant logistique expert. Je t'ai fourni les listes extraites :
 
-# — Upload —
-uploaded = st.file_uploader("Importez votre PDF ou photo", type=["pdf","png","jpg","jpeg"])
-if not uploaded:
-    st.stop()
+- Références : {refs}
+- Codes-barres : {eans}
+- Cartons : {boxes}
+- Produits : {prods}
 
+Associe chaque référence à son code-barres, son nombre de cartons et son nombre de produits.
+Si une référence apparaît plusieurs fois, regroupe-les et somme cartons & produits.
+Ignore les valeurs qui n'ont pas d'équivalent en référence.
+Ajoute une ligne {"Référence produit / 产品参考":"Total / 合计", "Code-barres / 条形码":"", "Nombre de cartons / 箱数":<somme cartons>, "Nombre de produits / 产品数量":<somme produits>, "Vérification / 校验":""}.
+Renvoie **uniquement ** le JSON d'une liste d'objets structurés ainsi :
+[
+  {
+    "Référence produit / 产品参考": "...",
+    "Code-barres / 条形码": "...",
+    "Nombre de cartons / 箱数": X,
+    "Nombre de produits / 产品数量": Y,
+    "Vérification / 校验": ""
+  }, …
+]
+""".strip()
+
+# — 7) Upload —
+uploaded = st.file_uploader("Importez PDF ou image", type=["pdf","png","jpg","jpeg"])
+if not uploaded: st.stop()
 file_bytes = uploaded.getvalue()
 checksum = hashlib.md5(file_bytes).hexdigest()
 st.markdown(f'<div class="card">Fichier : **{uploaded.name}** — MD5 : `{checksum}`</div>', unsafe_allow_html=True)
 
-# — Préparation des pages —
+# — 8) Pages à analyser —
 ext = uploaded.name.lower().split(".")[-1]
-if ext == "pdf":
-    pages = extract_images_from_pdf(file_bytes)
-else:
-    pages = [Image.open(io.BytesIO(file_bytes))]
+pages = (extract_images_from_pdf(file_bytes) if ext=="pdf"
+         else [Image.open(io.BytesIO(file_bytes))])
 
-# — Aperçu —
-st.markdown('<div class="card"><div class="section-title">Aperçu des pages</div></div>', unsafe_allow_html=True)
-for i, img in enumerate(pages, start=1):
+# — 9) Aperçu —
+st.markdown('<div class="card"><div class="section-title">Aperçu</div></div>', unsafe_allow_html=True)
+for i,img in enumerate(pages,1):
     st.image(img, caption=f"Page {i}", use_container_width=True)
 
-# — Extraction des colonnes multiprompts —
-st.markdown('<div class="card"><div class="section-title">Extraction des colonnes</div></div>', unsafe_allow_html=True)
-all_columns = {col: [] for col in COLUMN_PROMPTS}
-for i, img in enumerate(pages, start=1):
+# — 10) Extract multi-prompts —
+st.markdown('<div class="card"><div class="section-title">Extraction brute</div></div>', unsafe_allow_html=True)
+all_cols = {col: [] for col in COLUMN_PROMPTS}
+for i,img in enumerate(pages,1):
     st.markdown(f"##### Page {i}")
-    for col, prompt in COLUMN_PROMPTS.items():
-        with st.spinner(f"Extraction « {col} »…"):
+    for col,p in COLUMN_PROMPTS.items():
+        with st.spinner(f"→ {col}"):
             try:
-                data = call_gpt_for_json(img, prompt)
-                vals = data.get("values", [])
-                all_columns[col].extend(vals)
+                vals = call_gpt_json(p, img)["values"]
+                all_cols[col].extend(vals)
                 st.success(f"{col} : {vals}")
             except Exception as e:
-                st.error(f"Erreur sur {col} : {e}")
+                st.error(f"Erreur {col} : {e}")
 
-# — Extraction du total (seulement sur la 1ʳᵉ page) —
+# — 11) Total —
 st.markdown('<div class="card"><div class="section-title">Extraction du total</div></div>', unsafe_allow_html=True)
 try:
-    total_data = call_gpt_for_json(pages[0], TOTAL_PROMPT)
-    total_extrait = int(total_data.get("total", 0))
-    st.success(f"Total extrait : {total_extrait}")
+    total = int(call_gpt_json(TOTAL_PROMPT, pages[0])["total"])
+    st.success(f"Total extrait : {total}")
 except Exception as e:
-    total_extrait = None
-    st.error(f"Erreur extraction total : {e}")
+    total = None
+    st.error(f"Erreur total : {e}")
 
-# — Assemblage —
-# Vérification que toutes les listes ont la même longueur
-lengths = {col: len(vals) for col, vals in all_columns.items()}
-if len(set(lengths.values())) != 1:
-    st.warning(f"⚠️ Listes de longueurs différentes : {lengths}")
-n = min(lengths.values())
-records = [
-    {col: all_columns[col][i] for col in COLUMN_PROMPTS}
-    for i in range(n)
-]
-df = pd.DataFrame(records)
-
-# — Comparaison somme vs total —
-df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
-somme = int(df["Nombre de produits / 产品数量"].sum())
-verif = "OK ✅" if total_extrait is not None and somme == total_extrait else f"❌ {abs(somme - (total_extrait or 0))} de différence"
-st.markdown('<div class="card"><div class="section-title">Vérification finale</div></div>', unsafe_allow_html=True)
-st.write(f"- Somme des produits calculée : **{somme}**")
-if total_extrait is not None:
-    st.write(f"- Total extrait du document : **{total_extrait}**")
-st.write(f"- **Résultat** : {verif}")
-
-# — Affichage et export —
-st.markdown('<div class="card"><div class="section-title">Table finale</div></div>', unsafe_allow_html=True)
-st.dataframe(df, use_container_width=True)
-csv = df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "📥 Télécharger CSV",
-    data=csv,
-    file_name="extraction_finale.csv",
-    mime="text/csv",
-    use_container_width=True
+# — 12) Harmonisation finale via GPT —
+st.markdown('<div class="card"><div class="section-title">Harmonisation & finalisation</div></div>', unsafe_allow_html=True)
+harmo_prompt = HARMONISE_PROMPT_TEMPLATE.format(
+    refs=json.dumps(all_cols["Référence produit / 产品参考"], ensure_ascii=False),
+    eans=json.dumps(all_cols["Code-barres / 条形码"], ensure_ascii=False),
+    boxes=json.dumps(all_cols["Nombre de cartons / 箱数"], ensure_ascii=False),
+    prods=json.dumps(all_cols["Nombre de produits / 产品数量"], ensure_ascii=False)
 )
+try:
+    final_list = call_gpt_json(harmo_prompt)[""]  # on extrait tout le JSON
+    # Si l'API renvoie directement la liste, on la récupère ainsi :
+    final_list = json.loads(re.search(r'(\[.*\])', json.dumps(call_gpt_json(harmo_prompt)), re.DOTALL).group(1))
+except Exception as e:
+    st.error(f"Échec harmonisation : {e}")
+    final_list = []
+
+# — 13) Affichage + vérif programmatique —
+if final_list:
+    df = pd.DataFrame(final_list)
+    # Conversion & vérification
+    df["Nombre de produits / 产品数量"] = pd.to_numeric(df["Nombre de produits / 产品数量"], errors="coerce")
+    somme_calc = int(df["Nombre de produits / 产品数量"].sum())
+    verif = "✅ OK" if total is not None and somme_calc == total else f"❌ Écart : {somme_calc - (total or 0)}"
+    st.dataframe(df, use_container_width=True)
+    st.markdown(f"**Somme calculée :** {somme_calc} — **Vérif vs total :** {verif}")
+    # Export
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Télécharger CSV final", data=csv,
+                       file_name="resultat_harmonise.csv", mime="text/csv",
+                       use_container_width=True)
+else:
+    st.error("Aucun résultat final à afficher.")
