@@ -8,11 +8,9 @@ import hashlib
 import fitz
 from PIL import Image
 import re
-from collections import Counter
 
-
+# Config
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
-
 st.markdown("""
 <style>
   .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
@@ -63,14 +61,12 @@ def extract_json_block(s: str) -> str:
         raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
     return max(matches, key=len)
 
-# PROMPT FINAL
+# PROMPT FINAL GPT-4o
 prompt = """
 Tu es un assistant logistique expert. Tu vas recevoir un bon de livraison (PDF ou image).
 
----
-
 OBJECTIF :
-1. Extrait le **total des quantités** indiqué en bas du document (ex. `TOTAL`, `TOTAL UNITÉ`, ou équivalent).
+1. Extrait le total des quantités indiqué en bas du document (ex. TOTAL, TOTAL UNITÉ, ou équivalent).
 2. Reconstitue un tableau clair (français + chinois), AVEC CES COLONNES :
    - Référence interne / 内部编号
    - Référence produit / 产品参考
@@ -78,8 +74,8 @@ OBJECTIF :
    - Nombre de produits / 产品数量
    - Vérification / 校验
 
-3. **Regroupe** les lignes ayant la même référence produit.
-4. **Additionne** les quantités pour chaque produit.
+3. Regroupe les lignes ayant la même référence produit.
+4. Additionne les quantités pour chaque produit.
 5. À la fin du tableau (UNE SEULE FOIS), ajoute une ligne “Total / 合计” avec la somme des colonnes Nombre de cartons et Nombre de produits.
 
 CONTRAINTES :
@@ -108,10 +104,8 @@ FORMAT DE SORTIE OBLIGATOIRE (JSON) :
 ]
 """
 
-# ---- UI ----
-
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Importez votre PDF, photo ou Excel", type=["pdf", "png", "jpg", "jpeg", "xlsx"], key="file_uploader")
+uploaded = st.file_uploader("Importez votre PDF, image ou Excel", type=["pdf", "png", "jpg", "jpeg", "xlsx"], key="file_uploader")
 if not uploaded:
     st.stop()
 
@@ -121,17 +115,62 @@ st.markdown(f'<div class="card">Fichier : {uploaded.name} — Hash MD5 : {hash_m
 
 ext = uploaded.name.lower().rsplit('.', 1)[-1]
 
-# Gestion EXCEL
-if ext in ["xlsx"]:
+if ext == "xlsx":
     try:
         df = pd.read_excel(io.BytesIO(file_bytes))
-        st.markdown('<div class="card"><div class="section-title">Aperçu Excel</div>', unsafe_allow_html=True)
-        st.dataframe(df, use_container_width=True)
+        # Recherche automatique des colonnes clés
+        colonne_ref_interne = [col for col in df.columns if "interne" in col.lower() or "编号" in col]
+        colonne_ref_produit = [col for col in df.columns if "ean" in col.lower() or "produit" in col.lower() or "参考" in col]
+        colonne_cartons = [col for col in df.columns if "carton" in col.lower() or "箱" in col]
+        colonne_qte = [col for col in df.columns if "quant" in col.lower() or "数量" in col]
+
+        df_std = pd.DataFrame()
+        df_std["Référence interne / 内部编号"] = df[colonne_ref_interne[0]] if colonne_ref_interne else ""
+        df_std["Référence produit / 产品参考"] = df[colonne_ref_produit[0]] if colonne_ref_produit else ""
+        df_std["Nombre de cartons / 箱数"] = df[colonne_cartons[0]] if colonne_cartons else 1
+        df_std["Nombre de produits / 产品数量"] = df[colonne_qte[0]] if colonne_qte else 0
+        df_std["Vérification / 校验"] = ""
+
+        # Groupement
+        group = df_std.groupby(
+            ["Référence interne / 内部编号", "Référence produit / 产品参考"],
+            as_index=False
+        ).agg({
+            "Nombre de cartons / 箱数": "sum",
+            "Nombre de produits / 产品数量": "sum"
+        })
+        group["Vérification / 校验"] = ""
+
+        # Ajout du total à la fin
+        total_cartons = group["Nombre de cartons / 箱数"].sum()
+        total_qte = group["Nombre de produits / 产品数量"].sum()
+        total_row = {
+            "Référence interne / 内部编号": "Total / 合计",
+            "Référence produit / 产品参考": "",
+            "Nombre de cartons / 箱数": total_cartons,
+            "Nombre de produits / 产品数量": total_qte,
+            "Vérification / 校验": ""
+        }
+        group = pd.concat([group, pd.DataFrame([total_row])], ignore_index=True)
+
+        st.markdown('<div class="card"><div class="section-title">Aperçu Excel (format standard)</div>', unsafe_allow_html=True)
+        st.dataframe(group, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
-        # Optionnel : ajouter contrôle sur colonnes attendues ou transformer le DataFrame
-        st.success("✅ Excel importé et affiché.")
+
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+            group.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
+        out.seek(0)
+        st.download_button(
+            "📅 Télécharger au format Excel",
+            data=out,
+            file_name="bon_de_livraison_corrige.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        st.stop()
     except Exception as e:
-        st.error(f"Erreur lors de la lecture Excel : {e}")
+        st.error(f"Erreur lors de la lecture ou transformation Excel : {e}")
         st.stop()
 else:
     # PDF ou image : OCR + GPT
@@ -167,17 +206,14 @@ else:
     st.dataframe(df, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Export Excel ---
-st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
-out = io.BytesIO()
-with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
-out.seek(0)
-st.download_button(
-    "📅 Télécharger au format Excel",
-    data=out,
-    file_name="bon_de_livraison_corrige.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True
-)
-st.markdown('</div>', unsafe_allow_html=True)
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
+    out.seek(0)
+    st.download_button(
+        "📅 Télécharger au format Excel",
+        data=out,
+        file_name="bon_de_livraison_corrige.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
